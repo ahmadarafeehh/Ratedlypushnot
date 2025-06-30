@@ -1,13 +1,17 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:uuid/uuid.dart';
+import 'package:Ratedly/services/notification_service.dart'; // Add this import
 
 class FireStoreMessagesMethods {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final NotificationService _notificationService =
+      NotificationService(); // Add this
 
   // Send a message
   Future<String> sendMessage(
       String chatId, String senderId, String receiverId, String message) async {
     try {
+      // Send message
       await _firestore
           .collection('chats')
           .doc(chatId)
@@ -19,10 +23,32 @@ class FireStoreMessagesMethods {
         'timestamp': FieldValue.serverTimestamp(),
         'isRead': false,
       });
+
+      // Update chat last message
+      await _firestore.collection('chats').doc(chatId).update({
+        'lastMessage': message,
+        'lastUpdated': FieldValue.serverTimestamp(),
+      });
+
+      // Trigger notification
+      await _notificationService.showMessageNotification(
+        senderId: senderId,
+        senderUsername: await _getUsername(senderId), // Implement this
+        message: message,
+        chatId: chatId,
+        targetUserId: receiverId,
+      );
+
       return 'success';
     } catch (e) {
       return e.toString();
     }
+  }
+
+  // Helper to get username
+  Future<String> _getUsername(String userId) async {
+    final doc = await _firestore.collection('users').doc(userId).get();
+    return doc['username'] ?? 'Unknown';
   }
 
   // Get messages from a chat
