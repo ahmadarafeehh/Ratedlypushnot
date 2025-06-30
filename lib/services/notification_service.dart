@@ -6,7 +6,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:Ratedly/services/analytics_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:Ratedly/services/error_log_service.dart'; // Add this import
+import 'package:Ratedly/services/error_log_service.dart';
 
 class NotificationService {
   final FirebaseMessaging _firebaseMessaging = FirebaseMessaging.instance;
@@ -16,6 +16,11 @@ class NotificationService {
   static final NotificationService _instance = NotificationService._internal();
   factory NotificationService() => _instance;
   NotificationService._internal();
+
+  // iOS-safe notification ID generator
+  int _getNotificationId() {
+    return DateTime.now().millisecondsSinceEpoch % 2147483647;
+  }
 
   Future<void> init() async {
     try {
@@ -65,6 +70,7 @@ class NotificationService {
         requestAlertPermission: true,
         requestBadgePermission: true,
         requestSoundPermission: true,
+        defaultPresentSound: true, // ← And this
       );
 
       await _notifications.initialize(
@@ -103,7 +109,6 @@ class NotificationService {
         exception: e,
         stack: st,
       );
-      // Add Firestore error logging
       ErrorLogService.logNotificationError(
         type: 'initialization',
         targetUserId: 'system',
@@ -126,7 +131,6 @@ class NotificationService {
       );
     }
 
-    // Optional: Log that we skipped categories
     AnalyticsService.logEvent(
       name: 'notification_categories',
       params: {'status': 'skipped'},
@@ -134,9 +138,9 @@ class NotificationService {
   }
 
   Future<void> _saveTokenToFirestore(String token) async {
-    User? user; // Declare user outside try block
+    User? user;
     try {
-      user = FirebaseAuth.instance.currentUser; // Assign inside try block
+      user = FirebaseAuth.instance.currentUser;
       if (user != null) {
         await FirebaseFirestore.instance
             .collection('users')
@@ -158,7 +162,6 @@ class NotificationService {
         exception: e,
         stack: st,
       );
-      // Add Firestore error logging
       ErrorLogService.logNotificationError(
         type: 'token_save',
         targetUserId: 'system',
@@ -171,7 +174,6 @@ class NotificationService {
 
   Future<void> _handleForegroundMessage(RemoteMessage message) async {
     try {
-      // Log receipt of message
       AnalyticsService.logEvent(
         name: 'fcm_foreground',
         params: {
@@ -181,7 +183,6 @@ class NotificationService {
         },
       );
 
-      // Show notification if it has a visual payload
       if (message.notification != null) {
         await _showNotification(
           title: message.notification!.title,
@@ -197,7 +198,6 @@ class NotificationService {
         exception: e,
         stack: st,
       );
-      // Add Firestore error logging with payload details
       ErrorLogService.logNotificationError(
         type: 'foreground_message',
         targetUserId: targetUserId,
@@ -214,7 +214,6 @@ Data: ${message.data}''',
 
   static Future<void> _handleBackgroundMessage(RemoteMessage message) async {
     try {
-      // Initialize Firebase in background isolate
       await Firebase.initializeApp();
 
       AnalyticsService.logEvent(
@@ -226,7 +225,6 @@ Data: ${message.data}''',
         },
       );
 
-      // Show notification if needed
       if (message.notification != null) {
         final NotificationService service = NotificationService();
         await service._showNotification(
@@ -243,7 +241,6 @@ Data: ${message.data}''',
         exception: e,
         stack: st,
       );
-      // Add Firestore error logging with payload details
       ErrorLogService.logNotificationError(
         type: 'background_message',
         targetUserId: targetUserId,
@@ -265,15 +262,16 @@ Data: ${message.data}''',
   }) async {
     try {
       const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
-        categoryIdentifier: 'ratedly_actions',
-        threadIdentifier: 'ratedly_notifications',
         presentAlert: true,
         presentBadge: true,
-        presentSound: true,
+        presentSound: true, // ← THIS IS CRUCIAL
+        sound: 'default', // ← Use default system sound
+        categoryIdentifier: 'ratedly_actions',
+        threadIdentifier: 'ratedly_notifications',
       );
 
       await _notifications.show(
-        DateTime.now().millisecondsSinceEpoch,
+        _getNotificationId(),
         title ?? 'New Activity',
         body ?? 'You have new activity in Ratedly',
         const NotificationDetails(iOS: iosDetails),
@@ -294,7 +292,6 @@ Data: ${message.data}''',
         exception: e,
         stack: st,
       );
-      // Add Firestore error logging with notification details
       ErrorLogService.logNotificationError(
         type: 'local_show',
         targetUserId: targetUserId,
@@ -309,7 +306,6 @@ Payload: ${data.toString()}''',
     }
   }
 
-  // Test Notification
   Future<void> showTestNotification() async {
     try {
       AnalyticsService.logNotificationAttempt(
@@ -318,13 +314,11 @@ Payload: ${data.toString()}''',
         trigger: 'manual',
       );
 
-      const DarwinNotificationDetails iosDetails = DarwinNotificationDetails();
-
       await _notifications.show(
-        DateTime.now().millisecondsSinceEpoch,
+        _getNotificationId(),
         'Test Notification',
         'This is a test notification from Ratedly!',
-        const NotificationDetails(iOS: iosDetails),
+        const NotificationDetails(iOS: DarwinNotificationDetails()),
         payload: jsonEncode({
           'type': 'test',
           'source': 'debug',
@@ -342,7 +336,6 @@ Payload: ${data.toString()}''',
         exception: e,
         stack: st,
       );
-      // Add Firestore error logging
       ErrorLogService.logNotificationError(
         type: 'test',
         targetUserId: 'test',
@@ -353,7 +346,65 @@ Payload: ${data.toString()}''',
     }
   }
 
-  // Follow Notification
+// Add to NotificationService class
+  Future<void> showMessageNotification({
+    required String senderId,
+    required String senderUsername,
+    required String message,
+    required String chatId,
+    required String targetUserId,
+  }) async {
+    try {
+      AnalyticsService.logNotificationAttempt(
+        type: 'message',
+        targetUserId: targetUserId,
+        trigger: 'app',
+      );
+
+      final truncatedMessage =
+          message.length > 50 ? '${message.substring(0, 47)}...' : message;
+
+      await _notifications.show(
+        _getNotificationId(),
+        'Message from $senderUsername',
+        truncatedMessage,
+        const NotificationDetails(
+            iOS: DarwinNotificationDetails(
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
+          sound: 'default',
+        )),
+        payload: jsonEncode({
+          'type': 'message',
+          'senderId': senderId,
+          'chatId': chatId,
+          'targetUserId': targetUserId,
+        }),
+      );
+
+      AnalyticsService.logNotificationDisplay(
+        type: 'message',
+        source: 'local',
+      );
+    } catch (e, st) {
+      AnalyticsService.logNotificationError(
+        type: 'message',
+        targetUserId: targetUserId,
+        exception: e,
+        stack: st,
+      );
+      ErrorLogService.logNotificationError(
+        type: 'message',
+        targetUserId: targetUserId,
+        exception: e,
+        stackTrace: st,
+        additionalInfo: 'Sender: $senderId ($senderUsername)\n'
+            'Message: ${message.length > 100 ? message.substring(0, 100) + '...' : message}',
+      );
+    }
+  }
+
   Future<void> showFollowNotification({
     required String followerId,
     required String followerUsername,
@@ -366,13 +417,11 @@ Payload: ${data.toString()}''',
         trigger: 'app',
       );
 
-      const DarwinNotificationDetails iosDetails = DarwinNotificationDetails();
-
       await _notifications.show(
-        DateTime.now().millisecondsSinceEpoch,
+        _getNotificationId(),
         'New Follower',
         '$followerUsername started following you',
-        const NotificationDetails(iOS: iosDetails),
+        const NotificationDetails(iOS: DarwinNotificationDetails()),
         payload: jsonEncode({
           'type': 'follow',
           'followerId': followerId,
@@ -391,7 +440,6 @@ Payload: ${data.toString()}''',
         exception: e,
         stack: st,
       );
-      // Add Firestore error logging with context
       ErrorLogService.logNotificationError(
         type: 'follow',
         targetUserId: targetUserId,
@@ -402,7 +450,6 @@ Payload: ${data.toString()}''',
     }
   }
 
-  // Follow Request Notification
   Future<void> showFollowRequestNotification({
     required String requesterId,
     required String requesterUsername,
@@ -415,15 +462,14 @@ Payload: ${data.toString()}''',
         trigger: 'app',
       );
 
-      const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
-        categoryIdentifier: 'ratedly_actions',
-      );
-
       await _notifications.show(
-        DateTime.now().millisecondsSinceEpoch,
+        _getNotificationId(),
         'Follow Request',
         '$requesterUsername wants to follow you',
-        const NotificationDetails(iOS: iosDetails),
+        const NotificationDetails(
+            iOS: DarwinNotificationDetails(
+          categoryIdentifier: 'ratedly_actions',
+        )),
         payload: jsonEncode({
           'type': 'follow_request',
           'requesterId': requesterId,
@@ -442,7 +488,6 @@ Payload: ${data.toString()}''',
         exception: e,
         stack: st,
       );
-      // Add Firestore error logging with context
       ErrorLogService.logNotificationError(
         type: 'follow_request',
         targetUserId: targetUserId,
@@ -453,7 +498,6 @@ Payload: ${data.toString()}''',
     }
   }
 
-  // Post Rating Notification
   Future<void> showPostRatingNotification({
     required String raterId,
     required String raterUsername,
@@ -467,13 +511,11 @@ Payload: ${data.toString()}''',
         trigger: 'app',
       );
 
-      const DarwinNotificationDetails iosDetails = DarwinNotificationDetails();
-
       await _notifications.show(
-        DateTime.now().millisecondsSinceEpoch,
+        _getNotificationId(),
         'New Rating',
         '$raterUsername rated your post: $rating',
-        const NotificationDetails(iOS: iosDetails),
+        const NotificationDetails(iOS: DarwinNotificationDetails()),
         payload: jsonEncode({
           'type': 'rating',
           'raterId': raterId,
@@ -492,7 +534,6 @@ Payload: ${data.toString()}''',
         exception: e,
         stack: st,
       );
-      // Add Firestore error logging with context
       ErrorLogService.logNotificationError(
         type: 'rating',
         targetUserId: targetUserId,
@@ -503,7 +544,6 @@ Payload: ${data.toString()}''',
     }
   }
 
-  // Comment Notification
   Future<void> showCommentNotification({
     required String commenterId,
     required String commenterUsername,
@@ -517,17 +557,15 @@ Payload: ${data.toString()}''',
         trigger: 'app',
       );
 
-      const DarwinNotificationDetails iosDetails = DarwinNotificationDetails();
-
       final truncatedComment = commentText.length > 50
           ? '${commentText.substring(0, 47)}...'
           : commentText;
 
       await _notifications.show(
-        DateTime.now().millisecondsSinceEpoch,
+        _getNotificationId(),
         'New Comment',
         '$commenterUsername commented: $truncatedComment',
-        const NotificationDetails(iOS: iosDetails),
+        const NotificationDetails(iOS: DarwinNotificationDetails()),
         payload: jsonEncode({
           'type': 'comment',
           'commenterId': commenterId,
@@ -546,7 +584,6 @@ Payload: ${data.toString()}''',
         exception: e,
         stack: st,
       );
-      // Add Firestore error logging with context
       ErrorLogService.logNotificationError(
         type: 'comment',
         targetUserId: targetUserId,
@@ -558,7 +595,6 @@ Payload: ${data.toString()}''',
     }
   }
 
-  // Comment Like Notification
   Future<void> showCommentLikeNotification({
     required String likerId,
     required String likerUsername,
@@ -572,17 +608,15 @@ Payload: ${data.toString()}''',
         trigger: 'app',
       );
 
-      const DarwinNotificationDetails iosDetails = DarwinNotificationDetails();
-
       final truncatedComment = commentText.length > 50
           ? '${commentText.substring(0, 47)}...'
           : commentText;
 
       await _notifications.show(
-        DateTime.now().millisecondsSinceEpoch,
+        _getNotificationId(),
         'Comment Liked',
         '$likerUsername liked your comment: $truncatedComment',
-        const NotificationDetails(iOS: iosDetails),
+        const NotificationDetails(iOS: DarwinNotificationDetails()),
         payload: jsonEncode({
           'type': 'comment_like',
           'likerId': likerId,
@@ -601,7 +635,6 @@ Payload: ${data.toString()}''',
         exception: e,
         stack: st,
       );
-      // Add Firestore error logging with context
       ErrorLogService.logNotificationError(
         type: 'comment_like',
         targetUserId: targetUserId,
