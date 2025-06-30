@@ -28,6 +28,9 @@ dependencies:
   shared_preferences: ^2.2.2
   firebase_messaging: ^15.2.7
   flutter_local_notifications: ^19.3.0
+  firebase_analytics: ^11.5.0
+  firebase_crashlytics: ^4.3.7
+  logger: ^2.0.0
 
 
 
