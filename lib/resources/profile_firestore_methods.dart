@@ -1,8 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:helloworld/resources/storage_methods.dart';
-import 'package:helloworld/services/notification_service.dart'; // Add this
-import 'package:helloworld/services/error_log_service.dart';
+import 'package:Ratedly/resources/storage_methods.dart';
+import 'package:Ratedly/services/notification_service.dart'; // Add this
+import 'package:Ratedly/services/error_log_service.dart';
 
 class FireStoreProfileMethods {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
