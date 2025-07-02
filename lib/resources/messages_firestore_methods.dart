@@ -1,6 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:uuid/uuid.dart';
-import 'package:helloworld/services/notification_service.dart'; // Add this import
+import 'package:Ratedly/services/notification_service.dart'; // Add this import
 
 class FireStoreMessagesMethods {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
