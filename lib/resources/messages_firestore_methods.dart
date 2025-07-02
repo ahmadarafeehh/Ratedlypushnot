@@ -1,6 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:uuid/uuid.dart';
-import 'package:Ratedly/services/notification_service.dart'; // Add this import
+import 'package:helloworld/services/notification_service.dart'; // Add this import
 
 class FireStoreMessagesMethods {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -30,13 +30,17 @@ class FireStoreMessagesMethods {
         'lastUpdated': FieldValue.serverTimestamp(),
       });
 
-      // Trigger notification
-      await _notificationService.showMessageNotification(
-        senderId: senderId,
-        senderUsername: await _getUsername(senderId), // Implement this
-        message: message,
-        chatId: chatId,
+      // FIX: Replace old method with triggerServerNotification
+      final senderUsername = await _getUsername(senderId);
+      _notificationService.triggerServerNotification(
+        type: 'message',
         targetUserId: receiverId,
+        title: senderUsername,
+        body: message,
+        customData: {
+          'senderId': senderId,
+          'chatId': chatId,
+        },
       );
 
       return 'success';
