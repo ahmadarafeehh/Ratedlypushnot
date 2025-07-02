@@ -1,10 +1,10 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
-import 'package:helloworld/models/post.dart';
-import 'package:helloworld/resources/storage_methods.dart';
+import 'package:Ratedly/models/post.dart';
+import 'package:Ratedly/resources/storage_methods.dart';
 import 'package:uuid/uuid.dart';
-import 'package:helloworld/services/notification_service.dart'; // Add this import
-import 'package:helloworld/services/error_log_service.dart';
+import 'package:Ratedly/services/notification_service.dart'; // Add this import
+import 'package:Ratedly/services/error_log_service.dart';
 
 class FireStorePostsMethods {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
