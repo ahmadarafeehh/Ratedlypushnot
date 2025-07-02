@@ -3,10 +3,10 @@ import 'dart:convert';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:Ratedly/services/analytics_service.dart';
+import 'package:helloworld/services/analytics_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:Ratedly/services/error_log_service.dart';
+import 'package:helloworld/services/error_log_service.dart';
 
 class NotificationService {
   final FirebaseMessaging _firebaseMessaging = FirebaseMessaging.instance;
@@ -17,25 +17,23 @@ class NotificationService {
   factory NotificationService() => _instance;
   NotificationService._internal();
 
-  // Helper to log detailed steps
   Future<void> _logStep(String stepName, String notificationType,
       {String? targetUserId, String? status, String? additionalInfo}) async {
     try {
       await FirebaseFirestore.instance.collection('notification_logs').add({
-        'timestamp': FieldValue.serverTimestamp(),
-        'step': stepName,
-        'notification_type': notificationType,
-        'target_user_id': targetUserId,
-        'status': status ?? 'in_progress',
-        'additional_info': additionalInfo,
-        'platform': 'ios',
-      });
+            'timestamp': FieldValue.serverTimestamp(),
+            'step': stepName,
+            'notification_type': notificationType,
+            'target_user_id': targetUserId ?? 'unknown',
+            'status': status ?? 'in_progress',
+            'additional_info': additionalInfo ?? '',
+            'platform': 'ios',
+          } as Map<String, Object?>);
     } catch (e) {
       print('🔥 Failed to log step: $e');
     }
   }
 
-  // iOS-safe notification ID generator
   int _getNotificationId() {
     return DateTime.now().millisecondsSinceEpoch % 2147483647;
   }
@@ -44,22 +42,17 @@ class NotificationService {
     try {
       await _logStep('init_started', 'service');
 
-      // 1. Request notification permissions
-      await _logStep('permission_request', 'service',
-          additionalInfo: 'Requesting permissions');
-
       final NotificationSettings settings =
           await _firebaseMessaging.requestPermission(
         alert: true,
         announcement: false,
         badge: true,
         carPlay: false,
-        criticalAlert: true, // Enable critical alerts
-        provisional: true, // Allow provisional notifications
+        criticalAlert: true,
+        provisional: true,
         sound: true,
       );
 
-      // Log permission status
       await _logStep('permission_received', 'service',
           status: 'success',
           additionalInfo: 'Status: ${settings.authorizationStatus.name}');
@@ -75,8 +68,6 @@ class NotificationService {
         },
       );
 
-      // 2. Configure foreground presentation
-      await _logStep('foreground_config', 'service');
       await FirebaseMessaging.instance
           .setForegroundNotificationPresentationOptions(
         alert: true,
@@ -84,28 +75,11 @@ class NotificationService {
         sound: true,
       );
 
-      // 3. Set up FCM message handlers
-      await _logStep('handlers_setup', 'service');
       FirebaseMessaging.onMessage.listen(_handleForegroundMessage);
       FirebaseMessaging.onMessageOpenedApp.listen(_handleBackgroundMessage);
 
-      // 4. Get and save FCM token
-      await _logStep('token_retrieval', 'service');
-      _firebaseMessaging.getToken().then((token) async {
-        if (token != null) {
-          await _logStep('token_received', 'service',
-              status: 'success',
-              additionalInfo: 'Token: ${token.substring(0, 6)}...');
+      _handleTokenRetrieval();
 
-          AnalyticsService.logFcmToken(token);
-          await _saveTokenToFirestore(token);
-        } else {
-          await _logStep('token_received', 'service',
-              status: 'failed', additionalInfo: 'Token is null');
-        }
-      });
-
-      // Handle token refresh
       _firebaseMessaging.onTokenRefresh.listen((newToken) async {
         await _logStep('token_refresh', 'service',
             additionalInfo: 'New token: ${newToken.substring(0, 6)}...');
@@ -113,20 +87,16 @@ class NotificationService {
         await _saveTokenToFirestore(newToken);
       });
 
-      // 5. Initialize local notifications
-      await _logStep('local_init_start', 'service');
-
-      const DarwinInitializationSettings initializationSettingsIOS =
+      final DarwinInitializationSettings initializationSettingsIOS =
           DarwinInitializationSettings(
         requestAlertPermission: true,
         requestBadgePermission: true,
         requestSoundPermission: true,
-        defaultPresentSound: true,          // Handle local notification tap
-      
+        defaultPresentSound: true,
       );
 
       await _notifications.initialize(
-        const InitializationSettings(iOS: initializationSettingsIOS),
+        InitializationSettings(iOS: initializationSettingsIOS),
         onDidReceiveNotificationResponse:
             (NotificationResponse response) async {
           if (response.payload != null) {
@@ -155,11 +125,9 @@ class NotificationService {
           }
         },
       );
-      await _logStep('local_init_complete', 'service', status: 'success');
 
-      // 6. Configure notification categories
-      await _logStep('channel_config', 'service');
       await _configureNotificationChannels();
+      _setupAuthListener();
 
       AnalyticsService.logEvent(
         name: 'notification_service_init',
@@ -187,6 +155,50 @@ class NotificationService {
     }
   }
 
+  Future<void> _setupAuthListener() async {
+    FirebaseAuth.instance.authStateChanges().listen((User? user) async {
+      if (user != null) {
+        await _logStep('user_logged_in', 'service',
+            targetUserId: user.uid, additionalInfo: 'User logged in');
+
+        final token = await _firebaseMessaging.getToken();
+        if (token != null) {
+          await _saveTokenToFirestore(token);
+        }
+      } else {
+        await _logStep('user_logged_out', 'service',
+            additionalInfo: 'User logged out');
+      }
+    });
+  }
+
+  Future<void> _handleTokenRetrieval() async {
+    try {
+      final token = await _firebaseMessaging.getToken();
+      if (token != null) {
+        await _logStep('token_received', 'service',
+            status: 'success',
+            additionalInfo: 'Token: ${token.substring(0, 6)}...');
+
+        AnalyticsService.logFcmToken(token);
+        await _saveTokenToFirestore(token);
+      } else {
+        await _logStep('token_received', 'service',
+            status: 'failed', additionalInfo: 'Token is null');
+      }
+    } catch (e, st) {
+      await _logStep('token_retrieval_failed', 'service',
+          status: 'error', additionalInfo: 'Error: ${e.toString()}');
+
+      AnalyticsService.logNotificationError(
+        type: 'token_retrieval',
+        targetUserId: 'system',
+        exception: e,
+        stack: st,
+      );
+    }
+  }
+
   Future<void> _configureNotificationChannels() async {
     try {
       await _logStep('channel_config_start', 'service');
@@ -195,7 +207,6 @@ class NotificationService {
           IOSFlutterLocalNotificationsPlugin>();
 
       if (iOSPlugin != null) {
-        await _logStep('ios_permission_request', 'service');
         final bool? result = await iOSPlugin.requestPermissions(
           alert: true,
           badge: true,
@@ -233,7 +244,7 @@ class NotificationService {
         await FirebaseFirestore.instance
             .collection('users')
             .doc(user.uid)
-            .update({'fcmToken': token});
+            .set({'fcmToken': token}, SetOptions(merge: true));
 
         await _logStep('token_save_success', 'service',
             targetUserId: user.uid,
@@ -249,6 +260,7 @@ class NotificationService {
       } else {
         await _logStep('token_save_skipped', 'service',
             status: 'skipped', additionalInfo: 'No user logged in');
+        await _storePendingToken(token);
       }
     } catch (e, st) {
       await _logStep('token_save_failed', 'service',
@@ -270,55 +282,76 @@ class NotificationService {
     }
   }
 
+  Future<void> _storePendingToken(String token) async {
+    try {
+      await _logStep('pending_token_store', 'service',
+          additionalInfo: 'Storing token for later association');
+
+      await FirebaseFirestore.instance
+          .collection('pending_tokens')
+          .doc(token)
+          .set(
+              {
+                'token': token,
+                'createdAt': FieldValue.serverTimestamp(),
+                'associated': false,
+              } as Map<String, Object?>,
+              SetOptions(merge: true));
+    } catch (e, st) {
+      await _logStep('pending_token_store_failed', 'service',
+          status: 'error', additionalInfo: 'Error: ${e.toString()}');
+    }
+  }
+
   Future<void> _handleForegroundMessage(RemoteMessage message) async {
-    String? targetUserId = message.data['targetUserId'] ?? 'unknown';
+    final String? rawTargetUserId = message.data['targetUserId'];
+    final String targetUserId = rawTargetUserId ?? 'unknown';
+
+    final String notificationType = message.data['type'] ?? 'fcm';
+    final String? messageId = message.messageId;
 
     try {
-      await _logStep(
-          'foreground_message_received', message.data['type'] ?? 'fcm',
-targetUserId: targetUserId ?? 'unknown_user',
-          additionalInfo: 'Message ID: ${message.messageId}');
+      await _logStep('foreground_message_received', notificationType,
+          targetUserId: targetUserId,
+          additionalInfo: 'Message ID: $messageId, '
+              'Data: ${_truncateData(message.data, 200)}');
 
       AnalyticsService.logEvent(
         name: 'fcm_foreground',
         params: {
-          'message_id': message.messageId ?? 'unknown',
+          'message_id': messageId ?? 'unknown',
           'sent_time': message.sentTime?.toIso8601String() ?? 'unknown',
           'data': message.data,
+          'target_user_id': targetUserId,
         },
       );
 
-      if (message.notification != null) {
-        await _logStep(
-            'foreground_show_notification', message.data['type'] ?? 'fcm',
-targetUserId: targetUserId ?? 'unknown_user',
-            additionalInfo: 'Title: ${message.notification!.title}');
-
+      if (message.notification != null || message.data.isNotEmpty) {
         await _showNotification(
-          title: message.notification!.title,
-          body: message.notification!.body,
+          title: message.notification?.title ?? '',
+          body: message.notification?.body ?? '',
           data: message.data,
         );
       } else {
-        await _logStep('foreground_no_notification', 'fcm',
-targetUserId: targetUserId ?? 'unknown_user',
+        await _logStep('foreground_no_notification', notificationType,
+            targetUserId: targetUserId,
             additionalInfo: 'No notification payload');
       }
     } catch (e, st) {
-      await _logStep('foreground_message_failed', 'fcm',
-targetUserId: targetUserId ?? 'unknown_user',
+      await _logStep('foreground_message_failed', notificationType,
+          targetUserId: targetUserId,
           status: 'error',
           additionalInfo: 'Error: ${e.toString()}');
 
       AnalyticsService.logNotificationError(
         type: 'foreground_message',
-targetUserId: targetUserId ?? 'unknown_user',
+        targetUserId: targetUserId,
         exception: e,
         stack: st,
       );
       ErrorLogService.logNotificationError(
         type: 'foreground_message',
-targetUserId: targetUserId ?? 'unknown_user',
+        targetUserId: targetUserId,
         exception: e,
         stackTrace: st,
         additionalInfo: '''
@@ -331,79 +364,85 @@ Data: ${message.data}''',
   }
 
   static Future<void> _handleBackgroundMessage(RemoteMessage message) async {
-    String? targetUserId = message.data['targetUserId'] ?? 'unknown';
+    final String? rawTargetUserId = message.data['targetUserId'];
+    final String targetUserId = rawTargetUserId ?? 'unknown';
+
+    final String notificationType = message.data['type'] ?? 'fcm';
+    final String? messageId = message.messageId;
 
     try {
       await Firebase.initializeApp();
 
-      // Logging through static method requires different approach
       await FirebaseFirestore.instance.collection('notification_logs').add({
-        'timestamp': FieldValue.serverTimestamp(),
-        'step': 'background_message_received',
-        'notification_type': message.data['type'] ?? 'fcm',
-        'target_user_id': targetUserId,
-        'status': 'in_progress',
-        'additional_info': 'Message ID: ${message.messageId}',
-        'platform': 'ios',
-      });
+            'timestamp': FieldValue.serverTimestamp(),
+            'step': 'background_message_received',
+            'notification_type': notificationType,
+            'target_user_id': targetUserId,
+            'status': 'in_progress',
+            'additional_info': 'Message ID: $messageId, '
+                'Data: ${_truncateData(message.data, 200)}',
+            'platform': 'ios',
+          } as Map<String, Object?>);
 
       AnalyticsService.logEvent(
         name: 'fcm_background',
         params: {
-          'message_id': message.messageId ?? 'unknown',
+          'message_id': messageId ?? 'unknown',
           'sent_time': message.sentTime?.toIso8601String() ?? 'unknown',
           'data': message.data,
+          'target_user_id': targetUserId,
         },
       );
 
-      if (message.notification != null) {
+      if (message.notification != null || message.data.isNotEmpty) {
         await FirebaseFirestore.instance.collection('notification_logs').add({
-          'timestamp': FieldValue.serverTimestamp(),
-          'step': 'background_show_notification',
-          'notification_type': message.data['type'] ?? 'fcm',
-          'target_user_id': targetUserId,
-          'status': 'in_progress',
-          'additional_info': 'Title: ${message.notification!.title}',
-          'platform': 'ios',
-        });
+              'timestamp': FieldValue.serverTimestamp(),
+              'step': 'background_show_notification',
+              'notification_type': notificationType,
+              'target_user_id': targetUserId,
+              'status': 'in_progress',
+              'additional_info':
+                  'Title: ${message.notification?.title ?? "No title"}',
+              'platform': 'ios',
+            } as Map<String, Object?>);
 
         final NotificationService service = NotificationService();
         await service._showNotification(
-          title: message.notification!.title,
-          body: message.notification!.body,
+          title: message.notification?.title ?? '',
+          body: message.notification?.body ?? '',
           data: message.data,
         );
       } else {
         await FirebaseFirestore.instance.collection('notification_logs').add({
-          'timestamp': FieldValue.serverTimestamp(),
-          'step': 'background_no_notification',
-          'notification_type': 'fcm',
-          'target_user_id': targetUserId,
-          'status': 'skipped',
-          'additional_info': 'No notification payload',
-          'platform': 'ios',
-        });
+              'timestamp': FieldValue.serverTimestamp(),
+              'step': 'background_no_notification',
+              'notification_type': notificationType,
+              'target_user_id': targetUserId,
+              'status': 'skipped',
+              'additional_info': 'No notification payload',
+              'platform': 'ios',
+            } as Map<String, Object?>);
       }
     } catch (e, st) {
       await FirebaseFirestore.instance.collection('notification_logs').add({
-        'timestamp': FieldValue.serverTimestamp(),
-        'step': 'background_message_failed',
-        'notification_type': 'fcm',
-        'target_user_id': targetUserId,
-        'status': 'error',
-        'additional_info': 'Error: ${e.toString()}',
-        'platform': 'ios',
-      });
+            'timestamp': FieldValue.serverTimestamp(),
+            'step': 'background_message_failed',
+            'notification_type': notificationType,
+            'target_user_id': targetUserId,
+            'status': 'error',
+            'additional_info': 'Error: ${e.toString()}',
+            'platform': 'ios',
+          } as Map<String, Object?>);
 
       AnalyticsService.logNotificationError(
         type: 'background_message',
-targetUserId: targetUserId ?? 'unknown_user',
+        targetUserId: targetUserId,
         exception: e,
         stack: st,
       );
       ErrorLogService.logNotificationError(
         type: 'background_message',
-targetUserId: targetUserId ?? 'unknown_user',
+        targetUserId: targetUserId,
         exception: e,
         stackTrace: st,
         additionalInfo: '''
@@ -420,12 +459,15 @@ Data: ${message.data}''',
     required String? body,
     required Map<String, dynamic> data,
   }) async {
+    final String? rawTargetUserId = data['targetUserId'];
+    final String targetUserId = rawTargetUserId ?? 'unknown';
     final String notificationType = data['type'] ?? 'unknown';
-    final String targetUserId = data['targetUserId'] ?? 'unknown';
 
     try {
       await _logStep('show_notification_start', notificationType,
-          targetUserId: targetUserId, additionalInfo: 'Title: $title');
+          targetUserId: targetUserId,
+          additionalInfo: 'Title: ${title ?? "No title"}, '
+              'Data: ${_truncateData(data, 200)}');
 
       const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
         presentAlert: true,
@@ -437,14 +479,13 @@ Data: ${message.data}''',
       );
 
       final notificationId = _getNotificationId();
-      await _logStep('notification_show', notificationType,
-          targetUserId: targetUserId,
-          additionalInfo: 'ID: $notificationId, Title: $title');
+      final String finalTitle = title ?? data['title'] ?? 'New Activity';
+      final String finalBody = body ?? data['body'] ?? 'You have new activity';
 
       await _notifications.show(
         notificationId,
-        title ?? 'New Activity',
-        body ?? 'You have new activity in Ratedly',
+        finalTitle,
+        finalBody,
         const NotificationDetails(iOS: iosDetails),
         payload: jsonEncode(data),
       );
@@ -452,11 +493,14 @@ Data: ${message.data}''',
       await _logStep('notification_shown', notificationType,
           targetUserId: targetUserId,
           status: 'success',
-          additionalInfo: 'ID: $notificationId');
+          additionalInfo: 'ID: $notificationId, '
+              'Type: $notificationType, '
+              'Target: $targetUserId');
 
+      // FIXED: Removed the undefined targetUserId parameter
       AnalyticsService.logNotificationDisplay(
         type: notificationType,
-        source: 'foreground',
+        source: 'server',
       );
     } catch (e, st) {
       await _logStep('notification_show_failed', notificationType,
@@ -482,6 +526,13 @@ Body: ${body ?? 'N/A'}
 Payload: ${data.toString()}''',
       );
     }
+  }
+
+  static String _truncateData(Map<String, dynamic> data, int maxLength) {
+    final dataStr = data.toString();
+    return dataStr.length > maxLength
+        ? dataStr.substring(0, maxLength) + '...'
+        : dataStr;
   }
 
   Future<void> showTestNotification() async {
@@ -532,378 +583,49 @@ Payload: ${data.toString()}''',
     }
   }
 
-  Future<void> showMessageNotification({
-    required String senderId,
-    required String senderUsername,
-    required String message,
-    required String chatId,
+  // SERVER-TRIGGERED NOTIFICATION METHOD
+  Future<void> triggerServerNotification({
+    required String type,
     required String targetUserId,
+    String? title,
+    String? body,
+    Map<String, dynamic>? customData,
   }) async {
-    const type = 'message';
     try {
-      await _logStep('message_notification_start', type,
+      await _logStep('server_notification_trigger', type,
           targetUserId: targetUserId,
-          additionalInfo: 'Sender: $senderUsername');
+          additionalInfo: 'Triggering server notification');
 
-      AnalyticsService.logNotificationAttempt(
-        type: type,
-        targetUserId: targetUserId,
-        trigger: 'app',
-      );
+      await FirebaseFirestore.instance.collection('notifications').add({
+            'type': type,
+            'targetUserId': targetUserId,
+            'title': title ?? 'New Notification',
+            'body': body ?? 'You have a new notification',
+            'customData': customData ?? {},
+            'createdAt': FieldValue.serverTimestamp(),
+          } as Map<String, Object?>);
 
-      final truncatedMessage =
-          message.length > 50 ? '${message.substring(0, 47)}...' : message;
-
-      await _notifications.show(
-        _getNotificationId(),
-        'Message from $senderUsername',
-        truncatedMessage,
-        const NotificationDetails(
-            iOS: DarwinNotificationDetails(
-          presentAlert: true,
-          presentBadge: true,
-          presentSound: true,
-          sound: 'default',
-        )),
-        payload: jsonEncode({
-          'type': type,
-          'senderId': senderId,
-          'chatId': chatId,
-          'targetUserId': targetUserId,
-        }),
-      );
-
-      await _logStep('message_notification_shown', type,
+      await _logStep('server_notification_triggered', type,
           targetUserId: targetUserId, status: 'success');
-
-      AnalyticsService.logNotificationDisplay(
-        type: type,
-        source: 'local',
-      );
     } catch (e, st) {
-      await _logStep('message_notification_failed', type,
+      // FIXED: Added comma after the second positional parameter
+      await _logStep('server_notification_trigger_failed', type,
           targetUserId: targetUserId,
           status: 'error',
           additionalInfo: 'Error: ${e.toString()}');
 
       AnalyticsService.logNotificationError(
-        type: type,
+        type: 'server_trigger',
         targetUserId: targetUserId,
         exception: e,
         stack: st,
       );
       ErrorLogService.logNotificationError(
-        type: type,
+        type: 'server_trigger',
         targetUserId: targetUserId,
         exception: e,
         stackTrace: st,
-        additionalInfo: 'Sender: $senderId ($senderUsername)\n'
-            'Message: ${message.length > 100 ? message.substring(0, 100) + '...' : message}',
-      );
-    }
-  }
-
-  Future<void> showFollowNotification({
-    required String followerId,
-    required String followerUsername,
-    required String targetUserId,
-  }) async {
-    const type = 'follow';
-    try {
-      await _logStep('follow_notification_start', type,
-          targetUserId: targetUserId,
-          additionalInfo: 'Follower: $followerUsername');
-
-      AnalyticsService.logNotificationAttempt(
-        type: type,
-        targetUserId: targetUserId,
-        trigger: 'app',
-      );
-
-      await _notifications.show(
-        _getNotificationId(),
-        'New Follower',
-        '$followerUsername started following you',
-        const NotificationDetails(iOS: DarwinNotificationDetails()),
-        payload: jsonEncode({
-          'type': type,
-          'followerId': followerId,
-          'targetUserId': targetUserId,
-        }),
-      );
-
-      await _logStep('follow_notification_shown', type,
-          targetUserId: targetUserId, status: 'success');
-
-      AnalyticsService.logNotificationDisplay(
-        type: type,
-        source: 'local',
-      );
-    } catch (e, st) {
-      await _logStep('follow_notification_failed', type,
-          targetUserId: targetUserId,
-          status: 'error',
-          additionalInfo: 'Error: ${e.toString()}');
-
-      AnalyticsService.logNotificationError(
-        type: type,
-        targetUserId: targetUserId,
-        exception: e,
-        stack: st,
-      );
-      ErrorLogService.logNotificationError(
-        type: type,
-        targetUserId: targetUserId,
-        exception: e,
-        stackTrace: st,
-        additionalInfo: 'Follower: $followerId ($followerUsername)',
-      );
-    }
-  }
-
-  Future<void> showFollowRequestNotification({
-    required String requesterId,
-    required String requesterUsername,
-    required String targetUserId,
-  }) async {
-    const type = 'follow_request';
-    try {
-      await _logStep('follow_request_start', type,
-          targetUserId: targetUserId,
-          additionalInfo: 'Requester: $requesterUsername');
-
-      AnalyticsService.logNotificationAttempt(
-        type: type,
-        targetUserId: targetUserId,
-        trigger: 'app',
-      );
-
-      await _notifications.show(
-        _getNotificationId(),
-        'Follow Request',
-        '$requesterUsername wants to follow you',
-        const NotificationDetails(
-            iOS: DarwinNotificationDetails(
-          categoryIdentifier: 'ratedly_actions',
-        )),
-        payload: jsonEncode({
-          'type': type,
-          'requesterId': requesterId,
-          'targetUserId': targetUserId,
-        }),
-      );
-
-      await _logStep('follow_request_shown', type,
-          targetUserId: targetUserId, status: 'success');
-
-      AnalyticsService.logNotificationDisplay(
-        type: type,
-        source: 'local',
-      );
-    } catch (e, st) {
-      await _logStep('follow_request_failed', type,
-          targetUserId: targetUserId,
-          status: 'error',
-          additionalInfo: 'Error: ${e.toString()}');
-
-      AnalyticsService.logNotificationError(
-        type: type,
-        targetUserId: targetUserId,
-        exception: e,
-        stack: st,
-      );
-      ErrorLogService.logNotificationError(
-        type: type,
-        targetUserId: targetUserId,
-        exception: e,
-        stackTrace: st,
-        additionalInfo: 'Requester: $requesterId ($requesterUsername)',
-      );
-    }
-  }
-
-  Future<void> showPostRatingNotification({
-    required String raterId,
-    required String raterUsername,
-    required double rating,
-    required String targetUserId,
-  }) async {
-    const type = 'rating';
-    try {
-      await _logStep('rating_notification_start', type,
-          targetUserId: targetUserId,
-          additionalInfo: 'Rater: $raterUsername, Rating: $rating');
-
-      AnalyticsService.logNotificationAttempt(
-        type: type,
-        targetUserId: targetUserId,
-        trigger: 'app',
-      );
-
-      await _notifications.show(
-        _getNotificationId(),
-        'New Rating',
-        '$raterUsername rated your post: $rating',
-        const NotificationDetails(iOS: DarwinNotificationDetails()),
-        payload: jsonEncode({
-          'type': type,
-          'raterId': raterId,
-          'targetUserId': targetUserId,
-        }),
-      );
-
-      await _logStep('rating_notification_shown', type,
-          targetUserId: targetUserId, status: 'success');
-
-      AnalyticsService.logNotificationDisplay(
-        type: type,
-        source: 'local',
-      );
-    } catch (e, st) {
-      await _logStep('rating_notification_failed', type,
-          targetUserId: targetUserId,
-          status: 'error',
-          additionalInfo: 'Error: ${e.toString()}');
-
-      AnalyticsService.logNotificationError(
-        type: type,
-        targetUserId: targetUserId,
-        exception: e,
-        stack: st,
-      );
-      ErrorLogService.logNotificationError(
-        type: type,
-        targetUserId: targetUserId,
-        exception: e,
-        stackTrace: st,
-        additionalInfo: 'Rater: $raterId ($raterUsername), Rating: $rating',
-      );
-    }
-  }
-
-  Future<void> showCommentNotification({
-    required String commenterId,
-    required String commenterUsername,
-    required String commentText,
-    required String targetUserId,
-  }) async {
-    const type = 'comment';
-    try {
-      await _logStep('comment_notification_start', type,
-          targetUserId: targetUserId,
-          additionalInfo: 'Commenter: $commenterUsername');
-
-      AnalyticsService.logNotificationAttempt(
-        type: type,
-        targetUserId: targetUserId,
-        trigger: 'app',
-      );
-
-      final truncatedComment = commentText.length > 50
-          ? '${commentText.substring(0, 47)}...'
-          : commentText;
-
-      await _notifications.show(
-        _getNotificationId(),
-        'New Comment',
-        '$commenterUsername commented: $truncatedComment',
-        const NotificationDetails(iOS: DarwinNotificationDetails()),
-        payload: jsonEncode({
-          'type': type,
-          'commenterId': commenterId,
-          'targetUserId': targetUserId,
-        }),
-      );
-
-      await _logStep('comment_notification_shown', type,
-          targetUserId: targetUserId, status: 'success');
-
-      AnalyticsService.logNotificationDisplay(
-        type: type,
-        source: 'local',
-      );
-    } catch (e, st) {
-      await _logStep('comment_notification_failed', type,
-          targetUserId: targetUserId,
-          status: 'error',
-          additionalInfo: 'Error: ${e.toString()}');
-
-      AnalyticsService.logNotificationError(
-        type: type,
-        targetUserId: targetUserId,
-        exception: e,
-        stack: st,
-      );
-      ErrorLogService.logNotificationError(
-        type: type,
-        targetUserId: targetUserId,
-        exception: e,
-        stackTrace: st,
-        additionalInfo: 'Commenter: $commenterId ($commenterUsername)\n'
-            'Comment: ${commentText.length > 100 ? commentText.substring(0, 100) + '...' : commentText}',
-      );
-    }
-  }
-
-  Future<void> showCommentLikeNotification({
-    required String likerId,
-    required String likerUsername,
-    required String commentText,
-    required String targetUserId,
-  }) async {
-    const type = 'comment_like';
-    try {
-      await _logStep('comment_like_start', type,
-          targetUserId: targetUserId, additionalInfo: 'Liker: $likerUsername');
-
-      AnalyticsService.logNotificationAttempt(
-        type: type,
-        targetUserId: targetUserId,
-        trigger: 'app',
-      );
-
-      final truncatedComment = commentText.length > 50
-          ? '${commentText.substring(0, 47)}...'
-          : commentText;
-
-      await _notifications.show(
-        _getNotificationId(),
-        'Comment Liked',
-        '$likerUsername liked your comment: $truncatedComment',
-        const NotificationDetails(iOS: DarwinNotificationDetails()),
-        payload: jsonEncode({
-          'type': type,
-          'likerId': likerId,
-          'targetUserId': targetUserId,
-        }),
-      );
-
-      await _logStep('comment_like_shown', type,
-          targetUserId: targetUserId, status: 'success');
-
-      AnalyticsService.logNotificationDisplay(
-        type: type,
-        source: 'local',
-      );
-    } catch (e, st) {
-      await _logStep('comment_like_failed', type,
-          targetUserId: targetUserId,
-          status: 'error',
-          additionalInfo: 'Error: ${e.toString()}');
-
-      AnalyticsService.logNotificationError(
-        type: type,
-        targetUserId: targetUserId,
-        exception: e,
-        stack: st,
-      );
-      ErrorLogService.logNotificationError(
-        type: type,
-        targetUserId: targetUserId,
-        exception: e,
-        stackTrace: st,
-        additionalInfo: 'Liker: $likerId ($likerUsername)\n'
-            'Comment: ${commentText.length > 100 ? commentText.substring(0, 100) + '...' : commentText}',
+        additionalInfo: 'Failed to trigger server notification',
       );
     }
   }
