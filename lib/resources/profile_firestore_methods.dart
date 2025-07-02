@@ -1,8 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:Ratedly/resources/storage_methods.dart';
-import 'package:Ratedly/services/notification_service.dart'; // Add this
-import 'package:Ratedly/services/error_log_service.dart';
+import 'package:helloworld/resources/storage_methods.dart';
+import 'package:helloworld/services/notification_service.dart'; // Add this
+import 'package:helloworld/services/error_log_service.dart';
 
 class FireStoreProfileMethods {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -204,12 +204,18 @@ class FireStoreProfileMethods {
           'followRequests': FieldValue.arrayUnion([requestData])
         });
 
-        // Trigger follow request notification
+        // FIX: Replace showFollowRequestNotification with triggerServerNotification
         final followerData = await userRef.get();
-        await _notificationService.showFollowRequestNotification(
-          requesterId: uid,
-          requesterUsername: followerData['username'],
+        final requesterUsername = followerData['username'] ?? 'Someone';
+
+        _notificationService.triggerServerNotification(
+          type: 'follow_request',
           targetUserId: followId,
+          title: 'New Follow Request',
+          body: '$requesterUsername wants to follow you',
+          customData: {
+            'requesterId': uid,
+          },
         );
 
         await _createFollowRequestNotification(uid, followId);
@@ -229,18 +235,23 @@ class FireStoreProfileMethods {
 
         await batch.commit();
 
-        // Trigger follow notification
+        // FIX: Replace showFollowNotification with triggerServerNotification
         final followerDataDoc = await userRef.get();
-        await _notificationService.showFollowNotification(
-          followerId: uid,
-          followerUsername: followerDataDoc['username'],
+        final followerUsername = followerDataDoc['username'] ?? 'Someone';
+
+        _notificationService.triggerServerNotification(
+          type: 'follow',
           targetUserId: followId,
+          title: 'New Follower',
+          body: '$followerUsername started following you',
+          customData: {
+            'followerId': uid,
+          },
         );
 
         await createFollowNotification(uid, followId);
       }
     } catch (e) {
-      // Add error logging
       ErrorLogService.logNotificationError(
         type: 'follow',
         targetUserId: followId,
