@@ -42,12 +42,40 @@ class RatingListScreen extends StatelessWidget {
     return FutureBuilder<DocumentSnapshot>(
       future: FirebaseFirestore.instance.collection('users').doc(userId).get(),
       builder: (context, userSnapshot) {
-        if (!userSnapshot.hasData) {
-          return ListTile(
-            leading: CircleAvatar(backgroundColor: _cardColor),
-            title: Text('Loading...', style: TextStyle(color: _textColor)),
+        if (!userSnapshot.hasData || !userSnapshot.data!.exists) {
+          // Show placeholder with rating and default avatar while user loads
+          return Container(
+            decoration: BoxDecoration(
+              color: _cardColor,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            margin: const EdgeInsets.symmetric(vertical: 4),
+            child: ListTile(
+              leading: CircleAvatar(
+                backgroundColor: _cardColor,
+                radius: 21,
+                child: Icon(
+                  Icons.account_circle,
+                  size: 42,
+                  color: _textColor.withOpacity(0.8),
+                ),
+              ),
+              title: Text('Loading...', style: TextStyle(color: _textColor)),
+              subtitle: Text(timeText,
+                  style: TextStyle(color: _textColor.withOpacity(0.6))),
+              trailing: Chip(
+                label: Text(
+                  userRating.toStringAsFixed(1),
+                  style: TextStyle(color: _textColor),
+                ),
+                backgroundColor: _cardColor,
+              ),
+            ),
           );
         }
+
+        final Map<String, dynamic>? userData =
+            userSnapshot.data!.data() as Map<String, dynamic>?;
 
         return FutureBuilder<bool>(
           future: FirestoreBlockMethods().isMutuallyBlocked(
@@ -56,7 +84,9 @@ class RatingListScreen extends StatelessWidget {
           ),
           builder: (context, blockSnapshot) {
             final isBlocked = blockSnapshot.data ?? false;
-            final userData = userSnapshot.data!.data() as Map<String, dynamic>;
+
+            final photoUrl = userData?['photoUrl'] as String? ?? '';
+            final username = userData?['username'] as String? ?? 'Unknown user';
 
             return Container(
               decoration: BoxDecoration(
@@ -70,36 +100,32 @@ class RatingListScreen extends StatelessWidget {
                   radius: 21,
                   backgroundImage: isBlocked
                       ? null
-                      : (userData['photoUrl'] != null &&
-                              userData['photoUrl'].isNotEmpty &&
-                              userData['photoUrl'] != "default")
-                          ? NetworkImage(userData['photoUrl'])
+                      : (photoUrl.isNotEmpty && photoUrl != 'default')
+                          ? NetworkImage(photoUrl)
                           : null,
-                  child: (isBlocked ||
-                          userData['photoUrl'] == null ||
-                          userData['photoUrl'].isEmpty ||
-                          userData['photoUrl'] == "default")
-                      ? Icon(
-                          Icons.account_circle,
-                          size: 42,
-                          color: _iconColor,
-                        )
-                      : null,
+                  child:
+                      (isBlocked || photoUrl.isEmpty || photoUrl == 'default')
+                          ? Icon(
+                              Icons.account_circle,
+                              size: 42,
+                              color: _iconColor,
+                            )
+                          : null,
                 ),
                 title: Text(
-                  isBlocked
-                      ? 'UserNotFound'
-                      : userData['username'] ?? 'Unknown user',
+                  isBlocked ? 'UserNotFound' : username,
                   style:
                       TextStyle(fontWeight: FontWeight.bold, color: _textColor),
                 ),
                 subtitle: Text(
-                  timeText, // Use the computed time text
+                  timeText,
                   style: TextStyle(color: _textColor.withOpacity(0.6)),
                 ),
                 trailing: Chip(
-                  label: Text(userRating.toStringAsFixed(1),
-                      style: TextStyle(color: _textColor)),
+                  label: Text(
+                    userRating.toStringAsFixed(1),
+                    style: TextStyle(color: _textColor),
+                  ),
                   backgroundColor: _cardColor,
                 ),
                 onTap: isBlocked
@@ -125,7 +151,9 @@ class RatingListScreen extends StatelessWidget {
     if (currentUser == null) {
       return Scaffold(
         backgroundColor: _backgroundColor,
-        body: Center(child: CircularProgressIndicator(color: _textColor)),
+        body: Center(
+          child: CircularProgressIndicator(color: _textColor),
+        ),
       );
     }
 
@@ -142,7 +170,7 @@ class RatingListScreen extends StatelessWidget {
             .doc(postId)
             .snapshots(),
         builder: (context, snapshot) {
-          if (!snapshot.hasData) {
+          if (!snapshot.hasData || !snapshot.data!.exists) {
             return ListView.builder(
               padding: const EdgeInsets.all(16),
               itemCount: initialRatings.length,
@@ -151,8 +179,9 @@ class RatingListScreen extends StatelessWidget {
             );
           }
 
-          final postData = snapshot.data!.data() as Map<String, dynamic>;
-          final ratings = postData['rate'] as List<dynamic>? ?? [];
+          final Map<String, dynamic>? postData =
+              snapshot.data!.data() as Map<String, dynamic>?;
+          final ratings = postData?['rate'] as List<dynamic>? ?? [];
 
           if (ratings.isEmpty) {
             return Center(
@@ -161,8 +190,11 @@ class RatingListScreen extends StatelessWidget {
             );
           }
 
-          ratings.sort((a, b) => (b['timestamp'] as Timestamp)
-              .compareTo(a['timestamp'] as Timestamp));
+          ratings.sort((a, b) {
+            final ta = a['timestamp'] as Timestamp?;
+            final tb = b['timestamp'] as Timestamp?;
+            return tb?.compareTo(ta ?? Timestamp(0, 0)) ?? 0;
+          });
 
           return ListView.separated(
             padding: const EdgeInsets.all(16),
