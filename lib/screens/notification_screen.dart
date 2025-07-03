@@ -175,13 +175,15 @@ class _PostRatingNotification extends StatelessWidget {
     final raterUserId = notification['raterUid'] as String? ?? '';
     final raterUsername = notification['raterUsername'] as String? ?? 'Someone';
     final rating = (notification['rating'] as num?)?.toDouble() ?? 0.0;
+    final postId = notification['postId'] as String? ?? ''; // Add this line
 
     return _NotificationTemplate(
       userId: raterUserId,
       title: '$raterUsername rated your post',
       subtitle: 'Rating: ${rating.toStringAsFixed(1)}',
       timestamp: notification['timestamp'],
-      onTap: () => _navigateToProfile(context, raterUserId),
+      // FIX: Navigate to post instead of profile
+      onTap: () => _navigateToPost(context, postId),
     );
   }
 }
@@ -284,7 +286,7 @@ class _NotificationTemplate extends StatelessWidget {
     this.actions,
   });
 
-  @override
+ @override
   Widget build(BuildContext context) {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
@@ -300,7 +302,11 @@ class _NotificationTemplate extends StatelessWidget {
         ],
       ),
       child: ListTile(
-        leading: _UserAvatar(userId: userId),
+        // FIX: Make avatar tap navigate to profile
+        leading: GestureDetector(
+          onTap: () => _navigateToProfile(context, userId),
+          child: _UserAvatar(userId: userId),
+        ),
         title: Text(title,
             style: const TextStyle(
                 fontWeight: FontWeight.bold, color: Color(0xFFd9d9d9))),
@@ -314,9 +320,10 @@ class _NotificationTemplate extends StatelessWidget {
             if (actions != null) Row(children: actions!),
           ],
         ),
-        onTap: onTap,
+        onTap: onTap, // Maintain existing tap behavior for entire tile
       ),
     );
+  
   }
 
   String _formatTimestamp(dynamic timestamp) {
