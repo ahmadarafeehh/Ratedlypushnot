@@ -217,8 +217,6 @@ class FireStoreProfileMethods {
             'requesterId': uid,
           },
         );
-
-        await _createFollowRequestNotification(uid, followId);
       } else {
         final batch = _firestore.batch();
 
@@ -248,8 +246,6 @@ class FireStoreProfileMethods {
             'followerId': uid,
           },
         );
-
-        await createFollowNotification(uid, followId);
       }
     } catch (e) {
       ErrorLogService.logNotificationError(
