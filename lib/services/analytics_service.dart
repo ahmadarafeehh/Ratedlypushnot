@@ -1,9 +1,8 @@
 // lib/services/analytics_service.dart
 import 'package:firebase_analytics/firebase_analytics.dart';
 import 'package:firebase_crashlytics/firebase_crashlytics.dart';
-import 'package:flutter/foundation.dart';
 import 'package:logger/logger.dart';
-import 'error_log_service.dart'; // Add this import
+import 'error_log_service.dart';
 
 class AnalyticsService {
   static final FirebaseAnalytics _analytics = FirebaseAnalytics.instance;
@@ -11,11 +10,10 @@ class AnalyticsService {
   static final Logger _logger = Logger();
 
   static Future<void> init() async {
+    _logger.i("🚀 Initializing AnalyticsService");
     await _crashlytics.setCrashlyticsCollectionEnabled(true);
     await _analytics.setAnalyticsCollectionEnabled(true);
-    if (kDebugMode) {
-      _logger.i("Analytics service initialized");
-    }
+    _logger.i("✅ AnalyticsService initialized");
   }
 
   static void logEvent({
@@ -23,10 +21,10 @@ class AnalyticsService {
     required Map<String, Object> params,
   }) {
     try {
+      _logger.i('📊 [$name] ${params.toString()}');
       _analytics.logEvent(name: name, parameters: params);
-      _logger.i('[$name] ${params.toString()}');
     } catch (e) {
-      _logger.e("Analytics error: $e");
+      _logger.e("💥 Analytics error: $e");
     }
   }
 
@@ -41,13 +39,11 @@ class AnalyticsService {
       'target_user': targetUserId,
       'trigger': trigger,
       'status': error != null ? 'failed' : 'attempted',
-      'timestamp': DateTime.now().toIso8601String(),
     };
 
-    if (error != null) {
-      params['error'] = error;
-    }
+    if (error != null) params['error'] = error;
 
+    _logger.i('📤 Notification attempt: $type to $targetUserId');
     logEvent(name: 'notification_attempt', params: params);
   }
 
@@ -57,6 +53,9 @@ class AnalyticsService {
     required Object exception,
     StackTrace? stack,
   }) {
+    _logger.e('💥 Notification error: $type to $targetUserId',
+        error: exception, stackTrace: stack);
+
     _crashlytics.recordError(
       exception,
       stack,
@@ -70,17 +69,10 @@ class AnalyticsService {
         'type': type,
         'target_user': targetUserId,
         'exception': exception.toString(),
-        'timestamp': DateTime.now().toIso8601String(),
       },
     );
 
-    _logger.e(
-      '[NOTIFICATION ERROR] $type to $targetUserId',
-      error: exception,
-      stackTrace: stack,
-    );
-
-    // Add Firestore error logging
+    // Firestore error logging
     ErrorLogService.logNotificationError(
       type: type,
       targetUserId: targetUserId,
@@ -90,25 +82,21 @@ class AnalyticsService {
   }
 
   static void logFcmToken(String token) {
+    _logger.i('🔑 FCM token received: ${token.substring(0, 6)}...');
     logEvent(
       name: 'fcm_token_received',
       params: {'token': '${token.substring(0, 6)}...'},
     );
-    _logger.i('[FCM TOKEN] ${token.substring(0, 6)}...');
   }
 
   static void logNotificationDisplay({
     required String type,
     required String source,
   }) {
+    _logger.i('👀 Notification displayed: $type from $source');
     logEvent(
       name: 'notification_displayed',
-      params: {
-        'type': type,
-        'source': source,
-        'timestamp': DateTime.now().toIso8601String(),
-      },
+      params: {'type': type, 'source': source},
     );
-    _logger.i('[NOTIFICATION DISPLAYED] $type from $source');
   }
-} // Only ONE closing brace here
+}
