@@ -13,6 +13,7 @@ class ErrorLogService {
     String? additionalInfo,
   }) async {
     try {
+      print('⚠️ Logging notification error: $type');
       await _firestore.collection(_collectionName).add({
         'type': type,
         'target_user_id': targetUserId,
@@ -21,6 +22,7 @@ class ErrorLogService {
         'additional_info': additionalInfo ?? '',
         'timestamp': FieldValue.serverTimestamp(),
       });
+      print('✅ Error logged successfully');
     } catch (e) {
       print('🔥 FAILED TO LOG ERROR: $e');
     }
