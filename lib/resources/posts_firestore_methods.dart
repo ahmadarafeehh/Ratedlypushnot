@@ -110,14 +110,6 @@ class FireStorePostsMethods {
             await _firestore.collection('users').doc(uid).get();
         final likerUsername = likerSnapshot['username'] ?? 'Someone';
 
-        await createCommentLikeNotification(
-          postId,
-          commentId,
-          commentOwnerId,
-          uid,
-          result['commentText']!,
-        );
-
         // Trigger local notification
         _notificationService.triggerServerNotification(
           type: 'comment_like',
@@ -293,9 +285,6 @@ class FireStorePostsMethods {
       });
 
       if (!isSelfRating) {
-        // Create Firestore notification
-        await createNotification(postId, postOwnerUid, uid, roundedRating);
-
         // Trigger local notification
         final raterSnapshot =
             await _firestore.collection('users').doc(uid).get();
@@ -405,9 +394,6 @@ class FireStorePostsMethods {
         String postOwnerUid = postSnapshot['uid'];
 
         if (uid != postOwnerUid) {
-          await createCommentNotification(
-              postId, uid, name, profilePic, text, commentId);
-
           // FIX: Replace old method with triggerServerNotification
           _notificationService.triggerServerNotification(
             type: 'comment',
