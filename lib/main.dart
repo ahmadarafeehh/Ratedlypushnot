@@ -6,7 +6,7 @@ import 'package:Ratedly/screens/signup/auth_wrapper.dart';
 import 'package:Ratedly/utils/colors.dart';
 import 'package:Ratedly/services/analytics_service.dart';
 import 'package:Ratedly/services/notification_service.dart';
-import 'package:Ratedly/provider.dart';
+import 'package:provider/provider.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
