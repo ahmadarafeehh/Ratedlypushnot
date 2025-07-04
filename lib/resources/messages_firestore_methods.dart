@@ -1,17 +1,20 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:uuid/uuid.dart';
-import 'package:Ratedly/services/notification_service.dart'; // Add this import
+import 'package:Ratedly/services/notification_service.dart';
 
 class FireStoreMessagesMethods {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final NotificationService _notificationService =
-      NotificationService(); // Add this
+  final NotificationService _notificationService = NotificationService();
 
-  // Send a message
+  /// Send a chat message, send FCM push, and log it in “Push Not”.
   Future<String> sendMessage(
-      String chatId, String senderId, String receiverId, String message) async {
+    String chatId,
+    String senderId,
+    String receiverId,
+    String message,
+  ) async {
     try {
-      // Send message
+      // 1) Add the message to the chat subcollection
       await _firestore
           .collection('chats')
           .doc(chatId)
@@ -24,15 +27,15 @@ class FireStoreMessagesMethods {
         'isRead': false,
       });
 
-      // Update chat last message
+      // 2) Update the parent chat’s lastMessage & lastUpdated
       await _firestore.collection('chats').doc(chatId).update({
         'lastMessage': message,
         'lastUpdated': FieldValue.serverTimestamp(),
       });
 
-      // FIX: Replace old method with triggerServerNotification
+      // 3) Trigger an FCM push via your Cloud Function pipeline
       final senderUsername = await _getUsername(senderId);
-      _notificationService.triggerServerNotification(
+      await _notificationService.triggerServerNotification(
         type: 'message',
         targetUserId: receiverId,
         title: senderUsername,
@@ -43,19 +46,32 @@ class FireStoreMessagesMethods {
         },
       );
 
+      // 4) Record the push notification in “Push Not” so the Cloud Function fires
+      await _firestore.collection('Push Not').add({
+        'type': 'message',
+        'targetUserId': receiverId,
+        'title': senderUsername,
+        'body': message,
+        'customData': {
+          'senderId': senderId,
+          'chatId': chatId,
+        },
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+
       return 'success';
     } catch (e) {
       return e.toString();
     }
   }
 
-  // Helper to get username
+  /// Helper to fetch a user’s username
   Future<String> _getUsername(String userId) async {
     final doc = await _firestore.collection('users').doc(userId).get();
-    return doc['username'] ?? 'Unknown';
+    return doc.data()?['username'] as String? ?? 'Unknown';
   }
 
-  // Get messages from a chat
+  /// Stream all messages in a chat, sorted ascending by timestamp
   Stream<QuerySnapshot> getMessages(String chatId) {
     return _firestore
         .collection('chats')
@@ -65,51 +81,46 @@ class FireStoreMessagesMethods {
         .snapshots();
   }
 
-  // Create or retrieve a chat ID between two users
+  /// Find or create a one‑to‑one chat between two users
   Future<String> getOrCreateChat(String user1, String user2) async {
     try {
-      QuerySnapshot chatQuery = await _firestore
+      final chatQuery = await _firestore
           .collection('chats')
           .where('participants', arrayContains: user1)
           .get();
 
       for (var doc in chatQuery.docs) {
-        List participants = doc['participants'];
+        final participants = List<String>.from(doc['participants']);
         if (participants.contains(user2)) {
           return doc.id;
         }
       }
 
-      // If no chat exists, create a new one
-      String newChatId = const Uuid().v1();
+      final newChatId = const Uuid().v1();
       await _firestore.collection('chats').doc(newChatId).set({
         'chatId': newChatId,
         'participants': [user1, user2],
-        'lastMessage': "",
-        'lastUpdated': DateTime.now(),
+        'lastMessage': '',
+        'lastUpdated': FieldValue.serverTimestamp(),
       });
       return newChatId;
-    } catch (err) {
-      return err.toString();
+    } catch (e) {
+      return e.toString();
     }
   }
 
-  // Unread messages (total count)
+  /// Total unread messages across all chats
   Stream<int> getTotalUnreadCount(String currentUserId) {
     return _firestore
         .collectionGroup('messages')
         .where('receiverId', isEqualTo: currentUserId)
         .where('isRead', isEqualTo: false)
         .snapshots()
-        .asyncMap((snapshot) async {
-      if (snapshot.docs.isNotEmpty) {}
-      return snapshot.docs.length;
-    }).handleError((error) {
-      return 0;
-    });
+        .map((snap) => snap.docs.length)
+        .handleError((_) => 0);
   }
 
-  // Unread count for a specific chat
+  /// Unread messages for a specific chat
   Stream<int> getUnreadCount(String chatId, String currentUserId) {
     return _firestore
         .collection('chats')
@@ -118,12 +129,15 @@ class FireStoreMessagesMethods {
         .where('receiverId', isEqualTo: currentUserId)
         .where('isRead', isEqualTo: false)
         .snapshots()
-        .map((snapshot) => snapshot.docs.length);
+        .map((snap) => snap.docs.length);
   }
 
-  // Mark messages as read
-  Future<void> markMessagesAsRead(String chatId, String currentUserId) async {
-    final messages = await _firestore
+  /// Mark all messages in a chat as read
+  Future<void> markMessagesAsRead(
+    String chatId,
+    String currentUserId,
+  ) async {
+    final unreadSnaps = await _firestore
         .collection('chats')
         .doc(chatId)
         .collection('messages')
@@ -132,32 +146,27 @@ class FireStoreMessagesMethods {
         .get();
 
     final batch = _firestore.batch();
-    for (var doc in messages.docs) {
+    for (var doc in unreadSnaps.docs) {
       batch.update(doc.reference, {'isRead': true});
     }
     await batch.commit();
   }
 
-  // In FireStoreMessagesMethods
+  /// Delete all chats & messages for a user
   Future<void> deleteAllUserMessages(String uid) async {
-    // Get all chats where user is a participant
     final chatsQuery = await _firestore
         .collection('chats')
         .where('participants', arrayContains: uid)
         .get();
 
     final batch = _firestore.batch();
-
     for (final chatDoc in chatsQuery.docs) {
-      // Delete messages in each chat
       final messages = await chatDoc.reference.collection('messages').get();
-      for (final messageDoc in messages.docs) {
-        batch.delete(messageDoc.reference);
+      for (final msg in messages.docs) {
+        batch.delete(msg.reference);
       }
-      // Delete chat document
       batch.delete(chatDoc.reference);
     }
-
     await batch.commit();
   }
 }
