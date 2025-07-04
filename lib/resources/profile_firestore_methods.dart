@@ -1,12 +1,37 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:Ratedly/resources/storage_methods.dart';
-import 'package:Ratedly/services/notification_service.dart'; // Add this
+import 'package:Ratedly/services/notification_service.dart';
 import 'package:Ratedly/services/error_log_service.dart';
 
 class FireStoreProfileMethods {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final NotificationService _notificationService = NotificationService();
+
+  // Helper method to record push notifications
+  Future<void> _recordPushNotification({
+    required String type,
+    required String targetUserId,
+    required String title,
+    required String body,
+    required Map<String, dynamic> customData,
+  }) async {
+    try {
+      await _firestore.collection('Push Not').add({
+        'type': type,
+        'targetUserId': targetUserId,
+        'title': title,
+        'body': body,
+        'customData': customData,
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      if (kDebugMode) {
+        print('Error recording push notification: $e');
+      }
+    }
+  }
 
   // private or public account
   Future<void> toggleAccountPrivacy(String uid, bool isPrivate) async {
@@ -204,11 +229,22 @@ class FireStoreProfileMethods {
           'followRequests': FieldValue.arrayUnion([requestData])
         });
 
-        // FIX: Replace showFollowRequestNotification with triggerServerNotification
         final followerData = await userRef.get();
         final requesterUsername = followerData['username'] ?? 'Someone';
 
+        // Trigger server notification
         _notificationService.triggerServerNotification(
+          type: 'follow_request',
+          targetUserId: followId,
+          title: 'New Follow Request',
+          body: '$requesterUsername wants to follow you',
+          customData: {
+            'requesterId': uid,
+          },
+        );
+
+        // Record push notification
+        await _recordPushNotification(
           type: 'follow_request',
           targetUserId: followId,
           title: 'New Follow Request',
@@ -233,11 +269,22 @@ class FireStoreProfileMethods {
 
         await batch.commit();
 
-        // FIX: Replace showFollowNotification with triggerServerNotification
         final followerDataDoc = await userRef.get();
         final followerUsername = followerDataDoc['username'] ?? 'Someone';
 
+        // Trigger server notification
         _notificationService.triggerServerNotification(
+          type: 'follow',
+          targetUserId: followId,
+          title: 'New Follower',
+          body: '$followerUsername started following you',
+          customData: {
+            'followerId': uid,
+          },
+        );
+
+        // Record push notification
+        await _recordPushNotification(
           type: 'follow',
           targetUserId: followId,
           title: 'New Follower',
@@ -519,14 +566,14 @@ class FireStoreProfileMethods {
           }
         }
 
-        await _deleteAllUserChatsAndMessages(uid, batch); // Add this line
+        await _deleteAllUserChatsAndMessages(uid, batch);
         // Delete user's posts and their storage
         QuerySnapshot postsSnap = await _firestore
             .collection('posts')
             .where('uid', isEqualTo: uid)
             .get();
 
-// Delete in chunks to avoid batch limits
+        // Delete in chunks to avoid batch limits
         const batchSize = 400;
         for (int i = 0; i < postsSnap.docs.length; i += batchSize) {
           WriteBatch postBatch = _firestore.batch();
@@ -603,7 +650,6 @@ class FireStoreProfileMethods {
         if (profilePicUrl != null &&
             profilePicUrl.isNotEmpty &&
             profilePicUrl != 'default') {
-          // ← Add this validation
           await StorageMethods().deleteImage(profilePicUrl);
         }
 
