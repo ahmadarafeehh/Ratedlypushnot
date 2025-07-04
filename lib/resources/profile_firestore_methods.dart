@@ -210,89 +210,85 @@ class FireStoreProfileMethods {
       final targetUserRef = _firestore.collection('users').doc(followId);
       final timestamp = DateTime.now();
 
+      // Check privacy and pending state
       final isPrivate = (await targetUserRef.get())['isPrivate'] ?? false;
       final hasPending = await hasPendingRequest(uid, followId);
 
+      // Avoid duplicate requests or follows
       final currentUserDoc = await userRef.get();
       final following = (currentUserDoc.data()!)['following'] ?? [];
-      final isAlreadyFollowing =
-          following.any((entry) => entry['userId'] == followId);
-
+      final isAlreadyFollowing = following.any((e) => e['userId'] == followId);
       if (hasPending || isAlreadyFollowing) {
         await declineFollowRequest(followId, uid);
         return;
       }
 
       if (isPrivate) {
+        // 1) Update followRequests array
         final requestData = {'userId': uid, 'timestamp': timestamp};
         await targetUserRef.update({
           'followRequests': FieldValue.arrayUnion([requestData])
         });
 
-        final followerData = await userRef.get();
-        final requesterUsername = followerData['username'] ?? 'Someone';
-
-        // Trigger server notification
+        // 2) Server push
+        final followerDoc = await userRef.get();
+        final requesterUsername = followerDoc['username'] ?? 'Someone';
         _notificationService.triggerServerNotification(
           type: 'follow_request',
           targetUserId: followId,
           title: 'New Follow Request',
           body: '$requesterUsername wants to follow you',
-          customData: {
-            'requesterId': uid,
-          },
+          customData: {'requesterId': uid},
         );
 
-        // Record push notification
+        // 3) Record push in "Push Not"
         await _recordPushNotification(
           type: 'follow_request',
           targetUserId: followId,
           title: 'New Follow Request',
           body: '$requesterUsername wants to follow you',
-          customData: {
-            'requesterId': uid,
-          },
+          customData: {'requesterId': uid},
         );
+
+        // 4) In-app follow request notification
+        await _createFollowRequestNotification(uid, followId);
       } else {
+        // Public account: mutual follow updates
         final batch = _firestore.batch();
-
-        final followerData = {'userId': uid, 'timestamp': timestamp};
-        final followingData = {'userId': followId, 'timestamp': timestamp};
-
         batch.update(targetUserRef, {
-          'followers': FieldValue.arrayUnion([followerData])
+          'followers': FieldValue.arrayUnion([
+            {'userId': uid, 'timestamp': timestamp}
+          ])
         });
-
         batch.update(userRef, {
-          'following': FieldValue.arrayUnion([followingData])
+          'following': FieldValue.arrayUnion([
+            {'userId': followId, 'timestamp': timestamp}
+          ])
         });
-
         await batch.commit();
 
-        final followerDataDoc = await userRef.get();
-        final followerUsername = followerDataDoc['username'] ?? 'Someone';
-
-        // Trigger server notification
+        // 1) Server push
+        final followerDoc = await userRef.get();
+        final followerUsername = followerDoc['username'] ?? 'Someone';
         _notificationService.triggerServerNotification(
           type: 'follow',
           targetUserId: followId,
           title: 'New Follower',
           body: '$followerUsername started following you',
-          customData: {
-            'followerId': uid,
-          },
+          customData: {'followerId': uid},
         );
 
-        // Record push notification
+        // 2) Record push in "Push Not"
         await _recordPushNotification(
           type: 'follow',
           targetUserId: followId,
           title: 'New Follower',
           body: '$followerUsername started following you',
-          customData: {
-            'followerId': uid,
-          },
+          customData: {'followerId': uid},
         );
+
+        // 3) In-app follow notification
+        await createFollowNotification(uid, followId);
       }
     } catch (e) {
       ErrorLogService.logNotificationError(
