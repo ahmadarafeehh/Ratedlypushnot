@@ -11,6 +11,7 @@ class FireStorePostsMethods {
   final NotificationService _notificationService =
       NotificationService(); // Add this
 
+  // Upload a post
 // Upload a postz
   Future<String> uploadPost(
     String description,
@@ -251,6 +252,7 @@ class FireStorePostsMethods {
         'rate': ratings,
       });
 
+      // Inside ratePost method, in the notification trigger section:
       if (!isSelfRating) {
         final raterSnapshot =
             await _firestore.collection('users').doc(uid).get();
@@ -260,16 +262,14 @@ class FireStorePostsMethods {
           type: 'rating',
           targetUserId: postOwnerUid,
           title: 'New Rating',
-          body: '$raterUsername rated your post',
+          body:
+              '$raterUsername rated your post: ${roundedRating.toStringAsFixed(1)}★',
           customData: {
             'raterId': uid,
-            'rating': roundedRating,
             'postId': postId,
-            // REMOVED: 'postOwnerUid' field - causes conflict
           },
         );
       }
-
       res = 'success';
     } catch (err) {
       res = err.toString();
