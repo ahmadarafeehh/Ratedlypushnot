@@ -189,76 +189,79 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  GestureDetector(
-                    onTap: _showEditOptions,
-                    child: Container(
-                      width: 100,
-                      height: 100,
-                      decoration: BoxDecoration(
-                        color: _cardColor,
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: _textColor,
-                          width: 2.0,
+                  // Centered profile picture container
+                  Center(
+                    child: GestureDetector(
+                      onTap: _showEditOptions,
+                      child: Container(
+                        width: 100,
+                        height: 100,
+                        decoration: BoxDecoration(
+                          color: _cardColor,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: _textColor,
+                            width: 2.0,
+                          ),
                         ),
-                      ),
-                      child: Stack(
-                        children: [
-                          ClipOval(
-                            child: _image != null
-                                ? Image.memory(
-                                    _image!,
-                                    width: 100,
-                                    height: 100,
-                                    fit: BoxFit.cover,
-                                  )
-                                : (_currentPhotoUrl != null &&
-                                        _currentPhotoUrl != 'default')
-                                    ? Image.network(
-                                        _currentPhotoUrl!,
-                                        width: 100,
-                                        height: 100,
-                                        fit: BoxFit.cover,
-                                        errorBuilder:
-                                            (context, error, stackTrace) =>
-                                                Center(
+                        child: Stack(
+                          children: [
+                            ClipOval(
+                              child: _image != null
+                                  ? Image.memory(
+                                      _image!,
+                                      width: 100,
+                                      height: 100,
+                                      fit: BoxFit.cover,
+                                    )
+                                  : (_currentPhotoUrl != null &&
+                                          _currentPhotoUrl != 'default')
+                                      ? Image.network(
+                                          _currentPhotoUrl!,
+                                          width: 100,
+                                          height: 100,
+                                          fit: BoxFit.cover,
+                                          errorBuilder:
+                                              (context, error, stackTrace) =>
+                                                  Center(
+                                            child: Icon(
+                                              Icons.account_circle,
+                                              size: 96, // Reduced size
+                                              color: _textColor,
+                                            ),
+                                          ),
+                                        )
+                                      : Center(
                                           child: Icon(
                                             Icons.account_circle,
-                                            size: 120,
+                                            size: 96, // Reduced size
                                             color: _textColor,
                                           ),
                                         ),
-                                      )
-                                    : Center(
-                                        child: Icon(
-                                          Icons.account_circle,
-                                          size: 60,
-                                          color: _textColor,
-                                        ),
-                                      ),
-                          ),
-                          Positioned(
-                            right: 0,
-                            bottom: 0,
-                            child: Container(
-                              width: 24,
-                              height: 24,
-                              decoration: BoxDecoration(
-                                color: _cardColor,
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: _backgroundColor,
-                                  width: 2,
+                            ),
+                            Positioned(
+                              right: 0,
+                              bottom: 0,
+                              child: Container(
+                                width: 24,
+                                height: 24,
+                                decoration: BoxDecoration(
+                                  color: _cardColor,
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: _backgroundColor,
+                                    width: 2,
+                                  ),
+                                ),
+                                child: Icon(
+                                  Icons.edit,
+                                  size: 14,
+                                  color: _textColor,
                                 ),
                               ),
-                              child: Icon(
-                                Icons.edit,
-                                size: 14,
-                                color: _textColor,
-                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   ),
