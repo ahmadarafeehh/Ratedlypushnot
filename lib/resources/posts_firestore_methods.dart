@@ -3,16 +3,38 @@ import 'package:flutter/foundation.dart';
 import 'package:Ratedly/models/post.dart';
 import 'package:Ratedly/resources/storage_methods.dart';
 import 'package:uuid/uuid.dart';
-import 'package:Ratedly/services/notification_service.dart'; // Add this import
+import 'package:Ratedly/services/notification_service.dart';
 import 'package:Ratedly/services/error_log_service.dart';
 
 class FireStorePostsMethods {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final NotificationService _notificationService =
-      NotificationService(); // Add this
+  final NotificationService _notificationService = NotificationService();
+
+  // Helper method to record push notifications
+  Future<void> _recordPushNotification({
+    required String type,
+    required String targetUserId,
+    required String title,
+    required String body,
+    required Map<String, dynamic> customData,
+  }) async {
+    try {
+      await _firestore.collection('Push Not').add({
+        'type': type,
+        'targetUserId': targetUserId,
+        'title': title,
+        'body': body,
+        'customData': customData,
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      if (kDebugMode) {
+        print('Error recording push notification: $e');
+      }
+    }
+  }
 
   // Upload a post
-// Upload a postz
   Future<String> uploadPost(
     String description,
     Uint8List file,
@@ -65,8 +87,7 @@ class FireStorePostsMethods {
       String? commentOwnerId;
       final commentSnapshot = await commentRef.get();
       if (commentSnapshot.exists) {
-        // FIX: Use lowercase 'uid' to match the field name
-        commentOwnerId = commentSnapshot['uid']; // Was uppercase 'uid'
+        commentOwnerId = commentSnapshot['uid'];
       }
 
       final result = await _firestore.runTransaction<Map<String, dynamic>>(
@@ -111,7 +132,29 @@ class FireStorePostsMethods {
             await _firestore.collection('users').doc(uid).get();
         final likerUsername = likerSnapshot['username'] ?? 'Someone';
 
-        // Trigger local notification
+        // Create in-app notification
+        await createCommentLikeNotification(
+          postId,
+          commentId,
+          commentOwnerId,
+          uid,
+          result['commentText']!,
+        );
+
+        // Record push notification
+        await _recordPushNotification(
+          type: 'comment_like',
+          targetUserId: commentOwnerId,
+          title: 'New Like',
+          body: '$likerUsername liked your comment: ${result['commentText']}',
+          customData: {
+            'likerId': uid,
+            'postId': postId,
+            'commentId': commentId,
+          },
+        );
+
+        // Trigger server notification
         _notificationService.triggerServerNotification(
           type: 'comment_like',
           targetUserId: commentOwnerId,
@@ -124,12 +167,98 @@ class FireStorePostsMethods {
           },
         );
       }
-
       res = 'success';
     } catch (err) {
       res = err.toString();
     }
     return res;
+  }
+
+  Future<void> createCommentLikeNotification(
+    String postId,
+    String commentId,
+    String commentOwnerId,
+    String likerUid,
+    String commentText,
+  ) async {
+    try {
+      // Create descriptive document ID
+      final notificationId = 'comment_like_${commentId}_$likerUid';
+
+      // Get liker's information
+      final likerSnapshot =
+          await _firestore.collection('users').doc(likerUid).get();
+
+      // Create notification data
+      final notificationData = {
+        'type': 'comment_like',
+        'targetUserId': commentOwnerId,
+        'likerUid': likerUid,
+        'likerUsername': likerSnapshot['username'],
+        'likerProfilePic': likerSnapshot['photoUrl'],
+        'postId': postId,
+        'commentId': commentId,
+        'commentText': commentText,
+        'timestamp': FieldValue.serverTimestamp(),
+        'isRead': false,
+      };
+
+      // Set document with explicit ID
+      await _firestore
+          .collection('notifications')
+          .doc(notificationId)
+          .set(notificationData, SetOptions(merge: true));
+
+      if (kDebugMode) {}
+    } catch (err) {
+      if (kDebugMode) {}
+    }
+  }
+
+  // Create notification for rating
+  Future<void> createNotification(
+    String postId,
+    String postOwnerUid,
+    String raterUid,
+    double rating,
+  ) async {
+    try {
+      // Skip self-rating notifications
+      if (raterUid == postOwnerUid) {
+        if (kDebugMode) {}
+        return;
+      }
+
+      // Create descriptive document ID
+      final notificationId = 'post_rating_${postId}_$raterUid';
+      final notificationsRef = _firestore.collection('notifications');
+
+      // Get rater information
+      final raterSnapshot =
+          await _firestore.collection('users').doc(raterUid).get();
+
+      // Prepare notification data
+      final notificationData = {
+        'type': 'post_rating',
+        'postId': postId,
+        'targetUserId': postOwnerUid,
+        'raterUid': raterUid,
+        'raterUsername': raterSnapshot['username'],
+        'raterProfilePic': raterSnapshot['photoUrl'],
+        'rating': rating,
+        'timestamp': FieldValue.serverTimestamp(),
+        'isRead': false,
+      };
+
+      // Set/update the notification directly using known ID format
+      await notificationsRef
+          .doc(notificationId)
+          .set(notificationData, SetOptions(merge: true));
+
+      if (kDebugMode) {}
+    } catch (err) {
+      if (kDebugMode) {}
+    }
   }
 
   // For for you feed
@@ -166,7 +295,7 @@ class FireStorePostsMethods {
           .delete();
 
       await _firestore.collection('posts').doc(postId).update({
-        'commentsCount': FieldValue.increment(1),
+        'commentsCount': FieldValue.increment(-1),
       });
 
       final notificationsQuery = await _firestore
@@ -214,7 +343,6 @@ class FireStorePostsMethods {
   }
 
   // Rate a post
-  // Rate a post
   Future<String> ratePost(String postId, String uid, double rating) async {
     String res = "Some error occurred";
     String postOwnerUid = '';
@@ -224,7 +352,7 @@ class FireStorePostsMethods {
       DocumentSnapshot postSnapshot =
           await _firestore.collection('posts').doc(postId).get();
       List<dynamic> ratings = postSnapshot['rate'];
-      postOwnerUid = postSnapshot['uid']; // Fix: Use same variable name
+      postOwnerUid = postSnapshot['uid'];
       bool isSelfRating = (uid == postOwnerUid);
       bool hasRated = ratings.any((entry) => entry['userId'] == uid);
       final timestamp = DateTime.now();
@@ -252,12 +380,29 @@ class FireStorePostsMethods {
         'rate': ratings,
       });
 
-      // Inside ratePost method, in the notification trigger section:
+      // Handle notifications for non-self ratings
       if (!isSelfRating) {
+        // Create in-app notification
+        await createNotification(postId, postOwnerUid, uid, roundedRating);
+
         final raterSnapshot =
             await _firestore.collection('users').doc(uid).get();
         final raterUsername = raterSnapshot['username'] ?? 'Someone';
 
+        // Record push notification
+        await _recordPushNotification(
+          type: 'rating',
+          targetUserId: postOwnerUid,
+          title: 'New Rating',
+          body:
+              '$raterUsername rated your post: ${roundedRating.toStringAsFixed(1)}★',
+          customData: {
+            'raterId': uid,
+            'postId': postId,
+          },
+        );
+
+        // Trigger server notification
         _notificationService.triggerServerNotification(
           type: 'rating',
           targetUserId: postOwnerUid,
@@ -281,6 +426,55 @@ class FireStorePostsMethods {
       );
     }
     return res;
+  }
+
+  Future<void> createCommentNotification(
+    String postId,
+    String commenterUid,
+    String commenterName,
+    String commenterProfilePic,
+    String commentText,
+    String commentId,
+  ) async {
+    try {
+      if (kDebugMode) {}
+
+      // Fetch post owner UID
+      final postSnapshot =
+          await _firestore.collection('posts').doc(postId).get();
+      final postOwnerUid = postSnapshot['uid'];
+
+      // Skip self-comment notifications
+      if (commenterUid == postOwnerUid) {
+        if (kDebugMode) {}
+        return;
+      }
+
+      // Create descriptive document ID
+      final notificationId = 'comment_${postId}_$commentId';
+      final notificationData = {
+        'type': 'comment',
+        'targetUserId': postOwnerUid,
+        'commenterUid': commenterUid,
+        'commenterName': commenterName,
+        'commenterProfilePic': commenterProfilePic,
+        'commentText': commentText,
+        'postId': postId,
+        'commentId': commentId,
+        'timestamp': FieldValue.serverTimestamp(),
+        'isRead': false,
+      };
+
+      // Set notification directly with known ID
+      await _firestore
+          .collection('notifications')
+          .doc(notificationId)
+          .set(notificationData);
+
+      if (kDebugMode) {}
+    } catch (err) {
+      if (kDebugMode) {}
+    }
   }
 
   // Post a comment
@@ -316,7 +510,7 @@ class FireStorePostsMethods {
         res = 'success';
 
         await _firestore.collection('posts').doc(postId).update({
-          'commentsCount': FieldValue.increment(-1),
+          'commentsCount': FieldValue.increment(1),
         });
 
         DocumentSnapshot postSnapshot =
@@ -324,7 +518,30 @@ class FireStorePostsMethods {
         String postOwnerUid = postSnapshot['uid'];
 
         if (uid != postOwnerUid) {
-          // FIX: Replace old method with triggerServerNotification
+          // Create in-app notification
+          await createCommentNotification(
+            postId,
+            uid,
+            name,
+            profilePic,
+            text,
+            commentId,
+          );
+
+          // Record push notification
+          await _recordPushNotification(
+            type: 'comment',
+            targetUserId: postOwnerUid,
+            title: 'New Comment',
+            body: '$name commented: $text',
+            customData: {
+              'commenterId': uid,
+              'postId': postId,
+              'commentId': commentId,
+            },
+          );
+
+          // Trigger server notification
           _notificationService.triggerServerNotification(
             type: 'comment',
             targetUserId: postOwnerUid,
@@ -342,6 +559,7 @@ class FireStorePostsMethods {
       }
     } catch (err) {
       res = err.toString();
+      if (kDebugMode) {}
     }
     return res;
   }
@@ -377,7 +595,7 @@ class FireStorePostsMethods {
         'type': 'post',
         'postId': postId,
         'postImageUrl': postImageUrl,
-        'postCaption': safeCaption, // Original caption only
+        'postCaption': safeCaption,
         'postOwnerId': postOwnerId,
         'postOwnerUsername': safeOwnerUsername,
         'postOwnerPhotoUrl': safeOwnerPhotoUrl,
@@ -391,7 +609,7 @@ class FireStorePostsMethods {
           : safeCaption;
 
       await _firestore.collection('chats').doc(chatId).update({
-        'lastMessage': previewText, // No emoji or prefix
+        'lastMessage': previewText,
         'lastMessageType': 'post',
         'lastUpdated': FieldValue.serverTimestamp(),
       });
@@ -402,7 +620,7 @@ class FireStorePostsMethods {
     }
   }
 
-// post views
+  // Post views
   Future<void> recordPostView(String postId, String userId) async {
     try {
       await _firestore
@@ -421,7 +639,7 @@ class FireStorePostsMethods {
     }
   }
 
-// for post share
+  // For post share
   Future<bool> checkMutualBlock(String userId1, String userId2) async {
     final user1Doc = await _firestore.collection('users').doc(userId1).get();
     final user2Doc = await _firestore.collection('users').doc(userId2).get();
@@ -433,7 +651,6 @@ class FireStorePostsMethods {
   }
 
   // Delete a post
-  // In FireStorePostsMethods class
   Future<String> deletePost(String postId) async {
     String res = "Some error occurred";
     try {
@@ -460,7 +677,7 @@ class FireStorePostsMethods {
     return res;
   }
 
-// report a post
+  // Report a post
   Future<String> reportPost(String postId, String reason) async {
     String res = "Some error occurred";
     try {
