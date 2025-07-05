@@ -389,45 +389,43 @@ class FireStoreProfileMethods {
       batch.delete(notificationRef);
       await batch.commit();
 
-      final targetUserSnapshot = await targetUserRef.get();
-      final targetUsername = targetUserSnapshot['username'];
-      final targetProfilePic = targetUserSnapshot['photoUrl'];
+       await _createFollowRequestAcceptedNotification(
+      targetUid: targetUid,
+      requesterUid: requesterUid,
+    );
 
-      await _createFollowRequestAcceptedNotification(
-        targetUid: targetUid,
-        requesterUid: requesterUid,
-        targetUsername: targetUsername,
-        targetProfilePic: targetProfilePic,
-      );
-
+     
       await createFollowNotification(requesterUid, targetUid);
     } catch (e) {
       rethrow;
     }
   }
 
-  Future<void> _createFollowRequestAcceptedNotification({
-    required String targetUid,
-    required String requesterUid,
-    required String targetUsername,
-    required String targetProfilePic,
-  }) async {
-    try {
-      final notificationId = 'follow_accept_${requesterUid}_$targetUid';
+ Future<void> _createFollowRequestAcceptedNotification({
+  required String targetUid,
+  required String requesterUid,
+}) async {
+  try {
+    final notificationId = 'follow_accept_${requesterUid}_$targetUid';
+    
+    final requesterSnapshot = 
+        await _firestore.collection('users').doc(requesterUid).get();
+    final requesterData = requesterSnapshot.data() as Map<String, dynamic>;
 
-      await _firestore.collection('notifications').doc(notificationId).set({
-        'type': 'follow_request_accepted',
-        'targetUserId': requesterUid,
-        'senderId': targetUid,
-        'senderUsername': targetUsername,
-        'senderProfilePic': targetProfilePic,
-        'timestamp': FieldValue.serverTimestamp(),
-        'isRead': false,
-      });
-    } catch (err) {
-      rethrow;
-    }
+    await _firestore.collection('notifications').doc(notificationId).set({
+      'type': 'follow_request_accepted',
+      'targetUserId': requesterUid,
+      'senderId': targetUid,
+      'senderUsername': requesterData['username'],
+      'senderProfilePic': requesterData['photoUrl'],
+      'timestamp': FieldValue.serverTimestamp(),
+      'isRead': false,
+    });
+  } catch (err) {
+    rethrow;
   }
+}
+  
 
   Future<void> declineFollowRequest(
       String targetUid, String requesterUid) async {
