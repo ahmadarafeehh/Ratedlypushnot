@@ -53,10 +53,5 @@ flutter:
           style: italic
           
 flutter_native_splash:
-  color: "#121212"
-  image: assets/logo/22.png
-  android_12:
-    color: "#121212"
-    image: assets/logo/22.png
-    icon_background_color: "#121212"
   ios: true
+  color: "#121212"
