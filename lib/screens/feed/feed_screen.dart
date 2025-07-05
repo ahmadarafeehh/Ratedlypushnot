@@ -476,6 +476,8 @@ class _FeedScreenState extends State<FeedScreen> {
           );
         }
         return Container(
+          color: Theme.of(context)
+              .scaffoldBackgroundColor, // ← fill in behind the post
           margin: EdgeInsets.symmetric(
             horizontal: width > webScreenSize ? width * 0.3 : 0,
             vertical: width > webScreenSize ? 15 : 0,
