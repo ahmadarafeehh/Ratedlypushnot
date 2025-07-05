@@ -139,6 +139,7 @@ class _FollowNotification extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Uses followerUsername which is the requester's username
     return _NotificationTemplate(
       userId: notification['followerId'],
       title: '${notification['followerUsername']} started following you',
@@ -243,9 +244,11 @@ class _FollowAcceptedNotification extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Uses senderUsername which is the approver's username
     return _NotificationTemplate(
       userId: notification['senderId'],
-      title: '${notification['senderUsername']} approved your follow request',
+      title:
+          '${notification['requesterUsername']} approved your follow request',
       timestamp: notification['timestamp'],
       onTap: () => _navigateToProfile(context, notification['senderId']),
     );
