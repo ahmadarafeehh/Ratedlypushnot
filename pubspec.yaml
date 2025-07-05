@@ -51,3 +51,12 @@ flutter:
         - asset: assets/fonts/Montserrat-VariableFont_wght.ttf
         - asset: assets/fonts/Montserrat-Italic-VariableFont_wght.ttf
           style: italic
+          
+flutter_native_splash:
+  color: "#121212"
+  image: assets/logo/22.png
+  android_12:
+    color: "#121212"
+    image: assets/logo/22.png
+    icon_background_color: "#121212"
+  ios: true
