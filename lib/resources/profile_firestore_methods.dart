@@ -356,61 +356,92 @@ class FireStoreProfileMethods {
     });
   }
 
- Future<void> acceptFollowRequest(
-    String targetUid, String requesterUid) async {
-  try {
-    final batch = _firestore.batch();
-    final targetUserRef = _firestore.collection('users').doc(targetUid);
-    final requesterRef = _firestore.collection('users').doc(requesterUid);
-    final notificationRef = _firestore
-        .collection('notifications')
-        .doc('follow_request_${targetUid}_$requesterUid');
+  Future<void> acceptFollowRequest(
+      String targetUid, String requesterUid) async {
+    try {
+      final batch = _firestore.batch();
+      final targetUserRef = _firestore.collection('users').doc(targetUid);
+      final requesterRef = _firestore.collection('users').doc(requesterUid);
+      final notificationRef = _firestore
+          .collection('notifications')
+          .doc('follow_request_${targetUid}_$requesterUid');
 
-    final targetUserDoc = await targetUserRef.get();
-    final followRequests =
-        (targetUserDoc.data()?['followRequests'] as List?) ?? [];
-    final requestToRemove = followRequests.firstWhere(
-      (req) => req['userId'] == requesterUid,
-      orElse: () => null,
-    );
+      final targetUserDoc = await targetUserRef.get();
+      final followRequests =
+          (targetUserDoc.data()?['followRequests'] as List?) ?? [];
+      final requestToRemove = followRequests.firstWhere(
+        (req) => req['userId'] == requesterUid,
+        orElse: () => null,
+      );
 
-    if (requestToRemove != null) {
+      if (requestToRemove != null) {
+        batch.update(targetUserRef, {
+          'followRequests': FieldValue.arrayRemove([requestToRemove])
+        });
+      }
+
+      final timestamp = DateTime.now();
       batch.update(targetUserRef, {
-        'followRequests': FieldValue.arrayRemove([requestToRemove])
+        'followers': FieldValue.arrayUnion([
+          {'userId': requesterUid, 'timestamp': timestamp}
+        ])
       });
+
+      batch.update(requesterRef, {
+        'following': FieldValue.arrayUnion([
+          {'userId': targetUid, 'timestamp': timestamp}
+        ])
+      });
+
+      batch.delete(notificationRef);
+      await batch.commit();
+
+      // Create in-app notifications
+      await _createFollowRequestAcceptedNotification(
+        approverUid: targetUid, // The approver is targetUid
+        requesterUid: requesterUid,
+      );
+
+      await createFollowNotification(
+        requesterUid, // Follower UID
+        targetUid, // Followed UID
+      );
+
+      // ADDED: Push notification to requester about approval
+      try {
+        final approverSnapshot =
+            await _firestore.collection('users').doc(targetUid).get();
+        final approverUsername = approverSnapshot['username'] ?? 'Someone';
+
+        // Trigger server push notification
+        _notificationService.triggerServerNotification(
+          type: 'follow_request_accepted',
+          targetUserId: requesterUid,
+          title: 'Follow Request Approved',
+          body: '$approverUsername approved your follow request',
+          customData: {'approverId': targetUid},
+        );
+
+        // Record push notification in Firestore
+        await _recordPushNotification(
+          type: 'follow_request_accepted',
+          targetUserId: requesterUid,
+          title: 'Follow Request Approved',
+          body: '$approverUsername approved your follow request',
+          customData: {'approverId': targetUid},
+        );
+      } catch (e) {
+        ErrorLogService.logNotificationError(
+          type: 'follow_request_accepted',
+          targetUserId: requesterUid,
+          exception: e,
+          additionalInfo: 'Approver: $targetUid',
+        );
+      }
+    } catch (e) {
+      rethrow;
     }
-
-    final timestamp = DateTime.now();
-    batch.update(targetUserRef, {
-      'followers': FieldValue.arrayUnion([
-        {'userId': requesterUid, 'timestamp': timestamp}
-      ])
-    });
-
-    batch.update(requesterRef, {
-      'following': FieldValue.arrayUnion([
-        {'userId': targetUid, 'timestamp': timestamp}
-      ])
-    });
-
-    batch.delete(notificationRef);
-    await batch.commit();
-
-    // FIX: Use targetUid (approver) and requesterUid correctly
-    await _createFollowRequestAcceptedNotification(
-      approverUid: targetUid,   // The approver is targetUid
-      requesterUid: requesterUid,
-    );
-
-    // FIX: Use positional arguments for createFollowNotification
-    await createFollowNotification(
-      requesterUid,  // Follower UID
-      targetUid,     // Followed UID
-    );
-  } catch (e) {
-    rethrow;
   }
-}
 
   Future<void> _createFollowRequestAcceptedNotification({
     required String approverUid,
