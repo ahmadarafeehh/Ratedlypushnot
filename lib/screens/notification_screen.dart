@@ -248,7 +248,7 @@ class _FollowAcceptedNotification extends StatelessWidget {
     return _NotificationTemplate(
       userId: notification['senderId'],
       title:
-          '${notification['requesterUsername']} approved your follow request',
+          '${notification['senderUsername']} approved your follow request',
       timestamp: notification['timestamp'],
       onTap: () => _navigateToProfile(context, notification['senderId']),
     );
