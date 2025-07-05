@@ -268,9 +268,9 @@ class _FeedScreenState extends State<FeedScreen> {
   Widget build(BuildContext context) {
     final width = MediaQuery.of(context).size.width;
 
+    // In FeedScreen's build method
     return Scaffold(
-      backgroundColor:
-          width > webScreenSize ? webBackgroundColor : mobileBackgroundColor,
+      backgroundColor: mobileBackgroundColor, // Always use dark background
       appBar: _buildAppBar(width),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
@@ -475,9 +475,9 @@ class _FeedScreenState extends State<FeedScreen> {
             child: Center(child: CircularProgressIndicator()),
           );
         }
+        // In _buildPostsListView method
         return Container(
-          color: Theme.of(context)
-              .scaffoldBackgroundColor, // ← fill in behind the post
+          color: mobileBackgroundColor, // Always use dark background
           margin: EdgeInsets.symmetric(
             horizontal: width > webScreenSize ? width * 0.3 : 0,
             vertical: width > webScreenSize ? 15 : 0,
