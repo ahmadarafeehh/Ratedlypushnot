@@ -98,40 +98,66 @@ class FireStoreProfileMethods {
       final currentUserRef = _firestore.collection('users').doc(currentUserId);
       final followerRef = _firestore.collection('users').doc(followerId);
 
+      // 1. Remove from currentUser’s "followers"
       final currentUserDoc = await currentUserRef.get();
       final followers = (currentUserDoc.data()?['followers'] as List?) ?? [];
       final followerEntry = followers.firstWhere(
-        (entry) => entry['userId'] == followerId,
+        (e) => e['userId'] == followerId,
         orElse: () => null,
       );
-
       if (followerEntry != null) {
         batch.update(currentUserRef, {
-          'followers': FieldValue.arrayRemove([followerEntry])
+          'followers': FieldValue.arrayRemove([followerEntry]),
         });
       }
 
+      // 2. Also clear any stale followRequests on currentUser side
+      batch.update(currentUserRef, {
+        'followRequests': FieldValue.arrayRemove([
+          {'userId': followerId}
+        ])
+      });
+
+      // 3. Remove from follower’s "following"
       final followerDoc = await followerRef.get();
       final following = (followerDoc.data()?['following'] as List?) ?? [];
       final followingEntry = following.firstWhere(
-        (entry) => entry['userId'] == currentUserId,
+        (e) => e['userId'] == currentUserId,
         orElse: () => null,
       );
-
       if (followingEntry != null) {
         batch.update(followerRef, {
-          'following': FieldValue.arrayRemove([followingEntry])
+          'following': FieldValue.arrayRemove([followingEntry]),
         });
       }
 
-      final notificationsQuery = await _firestore
+      // 4. Also clear any stale followRequests on follower side
+      batch.update(followerRef, {
+        'followRequests': FieldValue.arrayRemove([
+          {'userId': currentUserId}
+        ])
+      });
+
+      // 5. Delete any “follow” notifications
+      final followNotifs = await _firestore
           .collection('notifications')
           .where('type', isEqualTo: 'follow')
           .where('followerId', isEqualTo: followerId)
           .where('targetUserId', isEqualTo: currentUserId)
           .get();
+      for (final doc in followNotifs.docs) {
+        batch.delete(doc.reference);
+      }
 
-      for (final doc in notificationsQuery.docs) {
+      // 6. **Delete any “follow_request_accepted” notifications**
+      //    so that followerId no longer sees "xyz approved your request"
+      final acceptNotifs = await _firestore
+          .collection('notifications')
+          .where('type', isEqualTo: 'follow_request_accepted')
+          .where('targetUserId', isEqualTo: followerId)
+          .where('senderId', isEqualTo: currentUserId)
+          .get();
+      for (final doc in acceptNotifs.docs) {
         batch.delete(doc.reference);
       }
 
@@ -205,34 +231,35 @@ class FireStoreProfileMethods {
   }
 
   Future<void> followUser(String uid, String followId) async {
-    try {
-      final userRef = _firestore.collection('users').doc(uid);
-      final targetUserRef = _firestore.collection('users').doc(followId);
-      final timestamp = DateTime.now();
+    final userRef = _firestore.collection('users').doc(uid);
+    final targetUserRef = _firestore.collection('users').doc(followId);
+    final timestamp = DateTime.now();
 
-      // Check privacy and pending state
+    try {
       final isPrivate = (await targetUserRef.get())['isPrivate'] ?? false;
       final hasPending = await hasPendingRequest(uid, followId);
 
-      // Avoid duplicate requests or follows
       final currentUserDoc = await userRef.get();
       final following = (currentUserDoc.data()!)['following'] ?? [];
-      final isAlreadyFollowing = following.any((e) => e['userId'] == followId);
+      final isAlreadyFollowing =
+          following.any((entry) => entry['userId'] == followId);
+
       if (hasPending || isAlreadyFollowing) {
         await declineFollowRequest(followId, uid);
         return;
       }
 
       if (isPrivate) {
-        // 1) Update followRequests array
         final requestData = {'userId': uid, 'timestamp': timestamp};
         await targetUserRef.update({
           'followRequests': FieldValue.arrayUnion([requestData])
         });
-
-        // 2) Server push
-        final followerDoc = await userRef.get();
-        final requesterUsername = followerDoc['username'] ?? 'Someone';
+        
+        // Get requester info for notifications
+        final requesterDoc = await userRef.get();
+        final requesterUsername = requesterDoc['username'] ?? 'Someone';
+        
+        // Send server push notification
         _notificationService.triggerServerNotification(
           type: 'follow_request',
           targetUserId: followId,
@@ -240,8 +267,8 @@ class FireStoreProfileMethods {
           body: '$requesterUsername wants to follow you',
           customData: {'requesterId': uid},
         );
-
-        // 3) Record push in "Push Not"
+        
+        // Record push notification
         await _recordPushNotification(
           type: 'follow_request',
           targetUserId: followId,
@@ -249,27 +276,30 @@ class FireStoreProfileMethods {
           body: '$requesterUsername wants to follow you',
           customData: {'requesterId': uid},
         );
-
-        // 4) In-app follow request notification
+        
+        // Create in-app notification
         await _createFollowRequestNotification(uid, followId);
       } else {
-        // Public account: mutual follow updates
         final batch = _firestore.batch();
-        batch.update(targetUserRef, {
-          'followers': FieldValue.arrayUnion([
-            {'userId': uid, 'timestamp': timestamp}
-          ])
-        });
-        batch.update(userRef, {
-          'following': FieldValue.arrayUnion([
-            {'userId': followId, 'timestamp': timestamp}
-          ])
-        });
-        await batch.commit();
 
-        // 1) Server push
+        final followerData = {'userId': uid, 'timestamp': timestamp};
+        final followingData = {'userId': followId, 'timestamp': timestamp};
+
+        batch.update(targetUserRef, {
+          'followers': FieldValue.arrayUnion([followerData])
+        });
+
+        batch.update(userRef, {
+          'following': FieldValue.arrayUnion([followingData])
+        });
+
+        await batch.commit();
+        
+        // Get follower info for notifications
         final followerDoc = await userRef.get();
         final followerUsername = followerDoc['username'] ?? 'Someone';
+        
+        // Send server push notification
         _notificationService.triggerServerNotification(
           type: 'follow',
           targetUserId: followId,
@@ -277,8 +307,8 @@ class FireStoreProfileMethods {
           body: '$followerUsername started following you',
           customData: {'followerId': uid},
         );
-
-        // 2) Record push in "Push Not"
+        
+        // Record push notification
         await _recordPushNotification(
           type: 'follow',
           targetUserId: followId,
@@ -286,11 +316,12 @@ class FireStoreProfileMethods {
           body: '$followerUsername started following you',
           customData: {'followerId': uid},
         );
-
-        // 3) In-app follow notification
+        
+        // Create in-app notification
         await createFollowNotification(uid, followId);
       }
     } catch (e) {
+      // Enhanced error logging
       ErrorLogService.logNotificationError(
         type: 'follow',
         targetUserId: followId,
@@ -466,31 +497,26 @@ class FireStoreProfileMethods {
   }
 
   Future<void> createFollowNotification(
-      String followerUid, String followedUid) async {
-    try {
-      final notificationsRef = _firestore.collection('notifications');
+    String followerUid,
+    String followedUid,
+  ) async {
+    final followerSnap =
+        await _firestore.collection('users').doc(followerUid).get();
 
-      final notificationId = 'follow_${followedUid}_$followerUid';
+    final notificationData = {
+      'type': 'follow',
+      'targetUserId': followedUid,
+      'followerId': followerUid,
+      'followerUsername': followerSnap['username'],
+      'followerProfilePic': followerSnap['photoUrl'],
+      'timestamp': FieldValue.serverTimestamp(),
+      'isRead': false,
+    };
 
-      final followerSnapshot =
-          await _firestore.collection('users').doc(followerUid).get();
-
-      final notificationData = {
-        'type': 'follow',
-        'targetUserId': followedUid,
-        'followerId': followerUid,
-        'followerUsername': followerSnapshot['username'],
-        'followerProfilePic': followerSnapshot['photoUrl'],
-        'timestamp': FieldValue.serverTimestamp(),
-        'isRead': false,
-      };
-
-      await notificationsRef
-          .doc(notificationId)
-          .set(notificationData, SetOptions(merge: true));
-    } catch (err) {
-      rethrow;
-    }
+    await _firestore
+        .collection('notifications')
+        .doc('follow_${followedUid}_$followerUid')
+        .set(notificationData, SetOptions(merge: true));
   }
 
   Future<String> deleteEntireUserAccount(
@@ -562,14 +588,14 @@ class FireStoreProfileMethods {
           }
         }
 
-        await _deleteAllUserChatsAndMessages(uid, batch);
+        await _deleteAllUserChatsAndMessages(uid, batch); // Add this line
         // Delete user's posts and their storage
         QuerySnapshot postsSnap = await _firestore
             .collection('posts')
             .where('uid', isEqualTo: uid)
             .get();
 
-        // Delete in chunks to avoid batch limits
+// Delete in chunks to avoid batch limits
         const batchSize = 400;
         for (int i = 0; i < postsSnap.docs.length; i += batchSize) {
           WriteBatch postBatch = _firestore.batch();
@@ -646,6 +672,7 @@ class FireStoreProfileMethods {
         if (profilePicUrl != null &&
             profilePicUrl.isNotEmpty &&
             profilePicUrl != 'default') {
+          // ← Add this validation
           await StorageMethods().deleteImage(profilePicUrl);
         }
 
