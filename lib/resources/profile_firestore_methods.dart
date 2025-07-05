@@ -55,6 +55,11 @@ class FireStoreProfileMethods {
       final requesterId = request['userId'];
       final timestamp = request['timestamp'] ?? FieldValue.serverTimestamp();
 
+      // ADD: Get requester's data
+      final requesterSnap =
+          await _firestore.collection('users').doc(requesterId).get();
+      final requesterData = requesterSnap.data() as Map<String, dynamic>?;
+
       batch.update(userRef, {
         'followers': FieldValue.arrayUnion([
           {'userId': requesterId, 'timestamp': timestamp}
@@ -73,6 +78,8 @@ class FireStoreProfileMethods {
 
       final userData = userDoc.data() as Map<String, dynamic>;
       final acceptNotificationId = 'follow_accept_${requesterId}_$userId';
+
+      // ADD requesterUsername here
       batch.set(
         _firestore.collection('notifications').doc(acceptNotificationId),
         {
@@ -80,6 +87,7 @@ class FireStoreProfileMethods {
           'targetUserId': requesterId,
           'senderId': userId,
           'senderUsername': userData['username'],
+          'requesterUsername': requesterData?['username'] ?? 'User', // Added
           'senderProfilePic': userData['photoUrl'],
           'timestamp': FieldValue.serverTimestamp(),
           'isRead': false,
@@ -88,7 +96,6 @@ class FireStoreProfileMethods {
     }
 
     batch.update(userRef, {'followRequests': []});
-
     await batch.commit();
   }
 
@@ -254,11 +261,11 @@ class FireStoreProfileMethods {
         await targetUserRef.update({
           'followRequests': FieldValue.arrayUnion([requestData])
         });
-        
+
         // Get requester info for notifications
         final requesterDoc = await userRef.get();
         final requesterUsername = requesterDoc['username'] ?? 'Someone';
-        
+
         // Send server push notification
         _notificationService.triggerServerNotification(
           type: 'follow_request',
@@ -267,7 +274,7 @@ class FireStoreProfileMethods {
           body: '$requesterUsername wants to follow you',
           customData: {'requesterId': uid},
         );
-        
+
         // Record push notification
         await _recordPushNotification(
           type: 'follow_request',
@@ -276,7 +283,7 @@ class FireStoreProfileMethods {
           body: '$requesterUsername wants to follow you',
           customData: {'requesterId': uid},
         );
-        
+
         // Create in-app notification
         await _createFollowRequestNotification(uid, followId);
       } else {
@@ -294,11 +301,11 @@ class FireStoreProfileMethods {
         });
 
         await batch.commit();
-        
+
         // Get follower info for notifications
         final followerDoc = await userRef.get();
         final followerUsername = followerDoc['username'] ?? 'Someone';
-        
+
         // Send server push notification
         _notificationService.triggerServerNotification(
           type: 'follow',
@@ -307,7 +314,7 @@ class FireStoreProfileMethods {
           body: '$followerUsername started following you',
           customData: {'followerId': uid},
         );
-        
+
         // Record push notification
         await _recordPushNotification(
           type: 'follow',
@@ -316,7 +323,7 @@ class FireStoreProfileMethods {
           body: '$followerUsername started following you',
           customData: {'followerId': uid},
         );
-        
+
         // Create in-app notification
         await createFollowNotification(uid, followId);
       }
@@ -349,83 +356,98 @@ class FireStoreProfileMethods {
     });
   }
 
-  Future<void> acceptFollowRequest(
-      String targetUid, String requesterUid) async {
-    try {
-      final batch = _firestore.batch();
-      final targetUserRef = _firestore.collection('users').doc(targetUid);
-      final requesterRef = _firestore.collection('users').doc(requesterUid);
-      final notificationRef = _firestore
-          .collection('notifications')
-          .doc('follow_request_${targetUid}_$requesterUid');
+ Future<void> acceptFollowRequest(
+    String targetUid, String requesterUid) async {
+  try {
+    final batch = _firestore.batch();
+    final targetUserRef = _firestore.collection('users').doc(targetUid);
+    final requesterRef = _firestore.collection('users').doc(requesterUid);
+    final notificationRef = _firestore
+        .collection('notifications')
+        .doc('follow_request_${targetUid}_$requesterUid');
 
-      final targetUserDoc = await targetUserRef.get();
-      final followRequests =
-          (targetUserDoc.data()?['followRequests'] as List?) ?? [];
-      final requestToRemove = followRequests.firstWhere(
-        (req) => req['userId'] == requesterUid,
-        orElse: () => null,
-      );
+    final targetUserDoc = await targetUserRef.get();
+    final followRequests =
+        (targetUserDoc.data()?['followRequests'] as List?) ?? [];
+    final requestToRemove = followRequests.firstWhere(
+      (req) => req['userId'] == requesterUid,
+      orElse: () => null,
+    );
 
-      if (requestToRemove != null) {
-        batch.update(targetUserRef, {
-          'followRequests': FieldValue.arrayRemove([requestToRemove])
-        });
-      }
-
-      final timestamp = DateTime.now();
+    if (requestToRemove != null) {
       batch.update(targetUserRef, {
-        'followers': FieldValue.arrayUnion([
-          {'userId': requesterUid, 'timestamp': timestamp}
-        ])
+        'followRequests': FieldValue.arrayRemove([requestToRemove])
       });
+    }
 
-      batch.update(requesterRef, {
-        'following': FieldValue.arrayUnion([
-          {'userId': targetUid, 'timestamp': timestamp}
-        ])
-      });
+    final timestamp = DateTime.now();
+    batch.update(targetUserRef, {
+      'followers': FieldValue.arrayUnion([
+        {'userId': requesterUid, 'timestamp': timestamp}
+      ])
+    });
 
-      batch.delete(notificationRef);
-      await batch.commit();
+    batch.update(requesterRef, {
+      'following': FieldValue.arrayUnion([
+        {'userId': targetUid, 'timestamp': timestamp}
+      ])
+    });
 
-       await _createFollowRequestAcceptedNotification(
-      targetUid: targetUid,
+    batch.delete(notificationRef);
+    await batch.commit();
+
+    // FIX: Use targetUid (approver) and requesterUid correctly
+    await _createFollowRequestAcceptedNotification(
+      approverUid: targetUid,   // The approver is targetUid
       requesterUid: requesterUid,
     );
 
-     
-      await createFollowNotification(requesterUid, targetUid);
-    } catch (e) {
-      rethrow;
-    }
-  }
-
- Future<void> _createFollowRequestAcceptedNotification({
-  required String targetUid,
-  required String requesterUid,
-}) async {
-  try {
-    final notificationId = 'follow_accept_${requesterUid}_$targetUid';
-    
-    final requesterSnapshot = 
-        await _firestore.collection('users').doc(requesterUid).get();
-    final requesterData = requesterSnapshot.data() as Map<String, dynamic>;
-
-    await _firestore.collection('notifications').doc(notificationId).set({
-      'type': 'follow_request_accepted',
-      'targetUserId': requesterUid,
-      'senderId': targetUid,
-      'senderUsername': requesterData['username'],
-      'senderProfilePic': requesterData['photoUrl'],
-      'timestamp': FieldValue.serverTimestamp(),
-      'isRead': false,
-    });
-  } catch (err) {
+    // FIX: Use positional arguments for createFollowNotification
+    await createFollowNotification(
+      requesterUid,  // Follower UID
+      targetUid,     // Followed UID
+    );
+  } catch (e) {
     rethrow;
   }
 }
-  
+
+  Future<void> _createFollowRequestAcceptedNotification({
+    required String approverUid,
+    required String requesterUid,
+  }) async {
+    try {
+      final notificationId = 'follow_accept_${requesterUid}_$approverUid';
+      // Fetch approver and requester
+      final approverSnapshot =
+          await _firestore.collection('users').doc(approverUid).get();
+      final requesterSnapshot =
+          await _firestore.collection('users').doc(requesterUid).get();
+
+      final approverData = approverSnapshot.data() ?? {};
+      final requesterData = requesterSnapshot.data() ?? {};
+
+      final senderUsername = approverData['username'] ?? 'User';
+      final fetchedRequesterUsername = requesterData['username'] ?? 'User';
+
+      final payload = {
+        'type': 'follow_request_accepted',
+        'targetUserId': requesterUid,
+        'senderId': approverUid,
+        'senderUsername': senderUsername,
+        'requesterUsername': fetchedRequesterUsername,
+        'senderProfilePic': approverData['photoUrl'],
+        'timestamp': FieldValue.serverTimestamp(),
+        'isRead': false,
+      };
+      await _firestore
+          .collection('notifications')
+          .doc(notificationId)
+          .set(payload);
+    } catch (err) {
+      rethrow;
+    }
+  }
 
   Future<void> declineFollowRequest(
       String targetUid, String requesterUid) async {
