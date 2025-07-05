@@ -61,7 +61,8 @@ class _NotificationList extends StatelessWidget {
       stream: FirebaseFirestore.instance
           .collection('notifications')
           .where('targetUserId', isEqualTo: currentUserId)
-          .snapshots(), // Removed orderBy for debugging
+          .orderBy('timestamp', descending: true)
+          .snapshots(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(
@@ -81,28 +82,14 @@ class _NotificationList extends StatelessWidget {
           );
         }
 
-        // Add debug logging
-
         return ListView.builder(
           padding: const EdgeInsets.symmetric(vertical: 16),
           itemCount: snapshot.data!.docs.length,
           itemBuilder: (context, index) {
-            final doc = snapshot.data!.docs[index];
-            final notification = doc.data() as Map<String, dynamic>;
-
-            // Extract and merge customData
-            final customData =
-                notification['customData'] as Map<String, dynamic>? ?? {};
-            final mergedData = {...notification, ...customData};
-
-            // Add timestamp field if missing
-            if (mergedData['timestamp'] == null &&
-                mergedData['createdAt'] != null) {
-              mergedData['timestamp'] = mergedData['createdAt'];
-            }
-
+            final notification =
+                snapshot.data!.docs[index].data() as Map<String, dynamic>;
             return _NotificationItem(
-              notification: mergedData,
+              notification: notification,
               currentUserId: currentUserId,
             );
           },
@@ -111,8 +98,6 @@ class _NotificationList extends StatelessWidget {
     );
   }
 }
-
-// Update all notification widgets to handle 'createdAt'
 
 class _NotificationItem extends StatelessWidget {
   final Map<String, dynamic> notification;
@@ -128,7 +113,7 @@ class _NotificationItem extends StatelessWidget {
     switch (notification['type']) {
       case 'comment':
         return _CommentNotification(notification: notification);
-      case 'rating':
+      case 'post_rating':
         return _PostRatingNotification(notification: notification);
       case 'follow_request':
         return _FollowRequestNotification(
@@ -154,15 +139,9 @@ class _FollowNotification extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // pick whichever one is actually set (followerUsername, senderUsername, or username)
-    final who = notification['followerUsername'] ??
-        notification['senderUsername'] ??
-        notification['username'] ??
-        'Someone';
-
     return _NotificationTemplate(
       userId: notification['followerId'],
-      title: '$who started following you',
+      title: '${notification['followerUsername']} started following you',
       timestamp: notification['timestamp'],
       onTap: () => _navigateToProfile(context, notification['followerId']),
     );
@@ -176,16 +155,12 @@ class _CommentNotification extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final commenterName = notification['commenterName'] ?? 'Someone';
-    final commentText =
-        notification['commentText'] ?? notification['body'] ?? '';
-
     return _NotificationTemplate(
-      userId: notification['commenterId'] ?? notification['commenterUid'] ?? '',
-      title: '$commenterName commented on your post',
-      subtitle: commentText,
+      userId: notification['commenterUid'],
+      title: '${notification['commenterName']} commented on your post',
+      subtitle: notification['commentText'],
       timestamp: notification['timestamp'],
-      onTap: () => _navigateToPost(context, notification['postId'] ?? ''),
+      onTap: () => _navigateToPost(context, notification['postId']),
     );
   }
 }
@@ -197,19 +172,23 @@ class _PostRatingNotification extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final raterUsername = notification['raterUsername'] ?? 'Someone';
+    final raterUserId = notification['raterUid'] as String? ?? '';
+    final raterUsername = notification['raterUsername'] as String? ?? 'Someone';
     final rating = (notification['rating'] as num?)?.toDouble() ?? 0.0;
+    final postId = notification['postId'] as String? ?? ''; // Add this line
 
     return _NotificationTemplate(
-      userId: notification['raterId'] ?? notification['raterUid'] ?? '',
+      userId: raterUserId,
       title: '$raterUsername rated your post',
-      subtitle: 'Rating: ${rating.toStringAsFixed(1)}★',
+      subtitle: 'Rating: ${rating.toStringAsFixed(1)}',
       timestamp: notification['timestamp'],
-      onTap: () => _navigateToPost(context, notification['postId'] ?? ''),
+      // FIX: Navigate to post instead of profile
+      onTap: () => _navigateToPost(context, postId),
     );
   }
 }
 
+// Replace the _FollowRequestNotification class with this
 class _FollowRequestNotification extends StatelessWidget {
   final Map<String, dynamic> notification;
   final String currentUserId;
@@ -223,32 +202,36 @@ class _FollowRequestNotification extends StatelessWidget {
   Widget build(BuildContext context) {
     final provider =
         Provider.of<FireStoreProfileMethods>(context, listen: false);
-    final requesterId =
-        notification['requesterId'] ?? notification['senderId'] ?? '';
-    final requesterUsername = notification['requesterUsername'] ?? 'Someone';
 
-    return _NotificationTemplate(
-      userId: requesterId,
-      title: '$requesterUsername wants to follow you',
-      timestamp: notification['timestamp'],
-      actions: [
-        TextButton(
-          onPressed: () =>
-              provider.acceptFollowRequest(currentUserId, requesterId),
-          child: const Text(
-            'Accept',
-            style: TextStyle(color: Color(0xFFd9d9d9)),
-          ),
-        ),
-        TextButton(
-          onPressed: () =>
-              provider.declineFollowRequest(currentUserId, requesterId),
-          child: const Text(
-            'Decline',
-            style: TextStyle(color: Color(0xFFd9d9d9)),
-          ),
-        ),
-      ],
+    return FutureBuilder<DocumentSnapshot>(
+      future: FirebaseFirestore.instance
+          .collection('users')
+          .doc(notification['requesterId'])
+          .get(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) return const SizedBox.shrink();
+
+        final user = snapshot.data!.data() as Map<String, dynamic>;
+        return _NotificationTemplate(
+          userId: notification['requesterId'],
+          title: '${user['username']} wants to follow you',
+          timestamp: notification['timestamp'],
+          actions: [
+            TextButton(
+              onPressed: () => provider.acceptFollowRequest(
+                  currentUserId, notification['requesterId']),
+              child: const Text('Accept',
+                  style: TextStyle(color: Color(0xFFd9d9d9))),
+            ),
+            TextButton(
+              onPressed: () => provider.declineFollowRequest(
+                  currentUserId, notification['requesterId']),
+              child: const Text('Decline',
+                  style: TextStyle(color: Color(0xFFd9d9d9))),
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -260,13 +243,11 @@ class _FollowAcceptedNotification extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final senderUsername = notification['senderUsername'] ?? 'Someone';
-
     return _NotificationTemplate(
-      userId: notification['senderId'] ?? '',
-      title: '$senderUsername approved your follow request',
+      userId: notification['senderId'],
+      title: '${notification['senderUsername']} approved your follow request',
       timestamp: notification['timestamp'],
-      onTap: () => _navigateToProfile(context, notification['senderId'] ?? ''),
+      onTap: () => _navigateToProfile(context, notification['senderId']),
     );
   }
 }
@@ -278,15 +259,12 @@ class _CommentLikeNotification extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final likerUsername = notification['likerUsername'] ?? 'Someone';
-    final commentText = notification['commentText'] ?? '';
-
     return _NotificationTemplate(
-      userId: notification['likerId'] ?? notification['likerUid'] ?? '',
-      title: '$likerUsername liked your comment',
-      subtitle: commentText,
+      userId: notification['likerUid'],
+      title: '${notification['likerUsername']} liked your comment',
+      subtitle: notification['commentText'],
       timestamp: notification['timestamp'],
-      onTap: () => _navigateToPost(context, notification['postId'] ?? ''),
+      onTap: () => _navigateToPost(context, notification['postId']),
     );
   }
 }
@@ -324,6 +302,7 @@ class _NotificationTemplate extends StatelessWidget {
         ],
       ),
       child: ListTile(
+        // FIX: Make avatar tap navigate to profile
         leading: GestureDetector(
           onTap: () => _navigateToProfile(context, userId),
           child: _UserAvatar(userId: userId),
@@ -334,40 +313,23 @@ class _NotificationTemplate extends StatelessWidget {
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (subtitle != null && subtitle!.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text(subtitle!,
-                    style: const TextStyle(color: Color(0xFF999999))),
-              ),
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text(_formatTimestamp(timestamp),
-                  style:
-                      const TextStyle(color: Color(0xFF999999), fontSize: 12)),
-            ),
-            if (actions != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Row(children: actions!),
-              ),
+            if (subtitle != null)
+              Text(subtitle!, style: const TextStyle(color: Color(0xFF999999))),
+            Text(_formatTimestamp(timestamp),
+                style: const TextStyle(color: Color(0xFF999999))),
+            if (actions != null) Row(children: actions!),
           ],
         ),
-        onTap: onTap,
+        onTap: onTap, // Maintain existing tap behavior for entire tile
       ),
     );
   }
 
   String _formatTimestamp(dynamic timestamp) {
     try {
-      if (timestamp is Timestamp) {
-        return timeago.format(timestamp.toDate());
-      } else if (timestamp is DateTime) {
-        return timeago.format(timestamp);
-      }
-      return 'Just now';
+      return timeago.format((timestamp as Timestamp).toDate());
     } catch (e) {
-      return 'Just now';
+      return 'Loading';
     }
   }
 }
@@ -407,17 +369,13 @@ class _UserAvatar extends StatelessWidget {
 }
 
 void _navigateToProfile(BuildContext context, String uid) {
-  if (uid.isNotEmpty) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (context) => ProfileScreen(uid: uid)),
-    );
-  }
+  Navigator.push(
+    context,
+    MaterialPageRoute(builder: (context) => ProfileScreen(uid: uid)),
+  );
 }
 
 void _navigateToPost(BuildContext context, String postId) async {
-  if (postId.isEmpty) return;
-
   final postSnapshot =
       await FirebaseFirestore.instance.collection('posts').doc(postId).get();
 
@@ -427,12 +385,12 @@ void _navigateToPost(BuildContext context, String postId) async {
       context,
       MaterialPageRoute(
         builder: (context) => ImageViewScreen(
-          imageUrl: postData['postUrl'] ?? '',
+          imageUrl: postData['postUrl'],
           postId: postId,
-          description: postData['description'] ?? '',
-          userId: postData['uid'] ?? '',
-          username: postData['username'] ?? '',
-          profImage: postData['profImage'] ?? '',
+          description: postData['description'],
+          userId: postData['uid'],
+          username: postData['username'],
+          profImage: postData['profImage'],
         ),
       ),
     );
