@@ -395,7 +395,7 @@ class FireStorePostsMethods {
           targetUserId: postOwnerUid,
           title: 'New Rating',
           body:
-              '$raterUsername rated your post: ${roundedRating.toStringAsFixed(1)}★',
+              '$raterUsername rated your post: ${roundedRating.toStringAsFixed(1)}/10',
           customData: {
             'raterId': uid,
             'postId': postId,
