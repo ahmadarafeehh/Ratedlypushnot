@@ -1,4 +1,4 @@
-// lib/services/notification_service.dart
+// Cleaned NotificationService without notification_logs and analytics logging
 import 'dart:convert';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -22,58 +22,45 @@ class NotificationService {
 
   Future<void> init() async {
     try {
-      // Request iOS notification permissions
-      await _firebaseMessaging.requestPermission(
+      final NotificationSettings settings =
+          await _firebaseMessaging.requestPermission(
+        alert: true,
+        badge: true,
+        criticalAlert: true,
+        provisional: true,
+        sound: true,
+      );
+
+      await FirebaseMessaging.instance
+          .setForegroundNotificationPresentationOptions(
         alert: true,
         badge: true,
         sound: true,
       );
 
-      // Configure foreground presentation options
-      await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(
-        alert: true,
-        badge: true,
-        sound: true,
-      );
-
-      // Set up message listeners
       FirebaseMessaging.onMessage.listen(_handleForegroundMessage);
       FirebaseMessaging.onMessageOpenedApp.listen(_handleBackgroundMessage);
 
-      // Handle existing token and refresh
       await _handleTokenRetrieval();
       _firebaseMessaging.onTokenRefresh.listen((newToken) async {
         await _saveTokenToFirestore(newToken);
       });
 
-      // Initialize local notifications plugin
-      final iosSettings = DarwinInitializationSettings(
-        requestAlertPermission: true,
-        requestBadgePermission: true,
-        requestSoundPermission: true,
-        defaultPresentSound: true,
-      );
+      final DarwinInitializationSettings initializationSettingsIOS =
+          DarwinInitializationSettings();
+
       await _notifications.initialize(
-        InitializationSettings(iOS: iosSettings),
-        onDidReceiveNotificationResponse: (NotificationResponse response) async {
+        InitializationSettings(iOS: initializationSettingsIOS),
+        onDidReceiveNotificationResponse:
+            (NotificationResponse response) async {
           if (response.payload != null) {
             try {
-              jsonDecode(response.payload!);
-              // Handle tapped notification payload if needed
-            } catch (e) {
-              ErrorLogService.logNotificationError(
-                type: 'tap_parse',
-                targetUserId: 'unknown',
-                exception: e,
-                stackTrace: StackTrace.current,
-                additionalInfo: 'Failed to parse notification payload',
-              );
-            }
+              final data = jsonDecode(response.payload!);
+            } catch (e) {}
           }
         },
       );
 
-      // Configure notification channels and auth listener
       await _configureNotificationChannels();
       _setupAuthListener();
     } catch (e, st) {
@@ -82,7 +69,7 @@ class NotificationService {
         targetUserId: 'system',
         exception: e,
         stackTrace: st,
-        additionalInfo: 'Initialization failed',
+        additionalInfo: 'Failed to initialize notification service',
       );
     }
   }
@@ -104,21 +91,14 @@ class NotificationService {
       if (token != null) {
         await _saveTokenToFirestore(token);
       }
-    } catch (e, st) {
-      ErrorLogService.logNotificationError(
-        type: 'token_retrieval',
-        targetUserId: 'system',
-        exception: e,
-        stackTrace: st,
-        additionalInfo: 'Token retrieval failed',
-      );
-    }
+    } catch (e, st) {}
   }
 
   Future<void> _configureNotificationChannels() async {
     try {
-      final iOSPlugin = _notifications
-          .resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>();
+      final iOSPlugin = _notifications.resolvePlatformSpecificImplementation<
+          IOSFlutterLocalNotificationsPlugin>();
+
       if (iOSPlugin != null) {
         await iOSPlugin.requestPermissions(
           alert: true,
@@ -126,15 +106,7 @@ class NotificationService {
           sound: true,
         );
       }
-    } catch (e, st) {
-      ErrorLogService.logNotificationError(
-        type: 'channel_config',
-        targetUserId: 'system',
-        exception: e,
-        stackTrace: st,
-        additionalInfo: 'Channel configuration failed',
-      );
-    }
+    } catch (e) {}
   }
 
   Future<void> _saveTokenToFirestore(String token) async {
@@ -146,54 +118,52 @@ class NotificationService {
             .doc(user.uid)
             .set({'fcmToken': token}, SetOptions(merge: true));
       } else {
-        await FirebaseFirestore.instance
-            .collection('pending_tokens')
-            .doc(token)
-            .set({
-          'token': token,
-          'createdAt': FieldValue.serverTimestamp(),
-          'associated': false,
-        }, SetOptions(merge: true));
+        await _storePendingToken(token);
       }
-    } catch (e, st) {
-      ErrorLogService.logNotificationError(
-        type: 'token_save',
-        targetUserId: 'system',
-        exception: e,
-        stackTrace: st,
-        additionalInfo: 'Token save failed',
-      );
-    }
+    } catch (e, st) {}
+  }
+
+  Future<void> _storePendingToken(String token) async {
+    try {
+      await FirebaseFirestore.instance
+          .collection('pending_tokens')
+          .doc(token)
+          .set({
+        'token': token,
+        'createdAt': FieldValue.serverTimestamp(),
+        'associated': false,
+      }, SetOptions(merge: true));
+    } catch (e, st) {}
   }
 
   Future<void> _handleForegroundMessage(RemoteMessage message) async {
-    final data = message.data;
-    final title = data['title'] ?? message.notification?.title;
-    final body = data['body'] ?? message.notification?.body;
-    if (title != null || body != null) {
-      await _showNotification(title: title, body: body, data: data);
+    final title = message.data['title'] ?? message.notification?.title ?? '';
+    final body = message.data['body'] ?? message.notification?.body ?? '';
+
+    if (title.isNotEmpty || body.isNotEmpty) {
+      await _showNotification(
+        title: title,
+        body: body,
+        data: message.data,
+      );
     }
   }
 
   static Future<void> _handleBackgroundMessage(RemoteMessage message) async {
     try {
       await Firebase.initializeApp();
-      final data = message.data;
-      final title = data['title'] ?? message.notification?.title;
-      final body = data['body'] ?? message.notification?.body;
-      if (title != null || body != null) {
-        final service = NotificationService();
-        await service._showNotification(title: title, body: body, data: data);
+      final title = message.data['title'] ?? message.notification?.title ?? '';
+      final body = message.data['body'] ?? message.notification?.body ?? '';
+
+      if (title.isNotEmpty || body.isNotEmpty) {
+        final NotificationService service = NotificationService();
+        await service._showNotification(
+          title: title,
+          body: body,
+          data: message.data,
+        );
       }
-    } catch (e, st) {
-      ErrorLogService.logNotificationError(
-        type: 'background_message',
-        targetUserId: 'system',
-        exception: e,
-        stackTrace: st,
-        additionalInfo: 'Background handling failed',
-      );
-    }
+    } catch (e, st) {}
   }
 
   Future<void> _showNotification({
@@ -201,10 +171,7 @@ class NotificationService {
     required String? body,
     required Map<String, dynamic> data,
   }) async {
-    final id = _getNotificationId();
-    final t = title ?? 'New Activity';
-    final b = body ?? 'You have new activity';
-    const details = DarwinNotificationDetails(
+    const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
       presentAlert: true,
       presentBadge: true,
       presentSound: true,
@@ -212,23 +179,33 @@ class NotificationService {
       categoryIdentifier: 'ratedly_actions',
       threadIdentifier: 'ratedly_notifications',
     );
+
+    final notificationId = _getNotificationId();
+    final finalTitle = title ?? data['title'] ?? 'New Activity';
+    final finalBody = body ?? data['body'] ?? 'You have new activity';
+
     await _notifications.show(
-      id,
-      t,
-      b,
-      const NotificationDetails(iOS: details),
+      notificationId,
+      finalTitle,
+      finalBody,
+      const NotificationDetails(iOS: iosDetails),
       payload: jsonEncode(data),
     );
   }
 
   Future<void> showTestNotification() async {
-    await _notifications.show(
-      _getNotificationId(),
-      'Test Notification',
-      'This is a test notification from Ratedly!',
-      const NotificationDetails(iOS: DarwinNotificationDetails()),
-      payload: jsonEncode({'type': 'test', 'source': 'debug'}),
-    );
+    try {
+      await _notifications.show(
+        _getNotificationId(),
+        'Test Notification',
+        'This is a test notification from Ratedly!',
+        const NotificationDetails(iOS: DarwinNotificationDetails()),
+        payload: jsonEncode({
+          'type': 'test',
+          'source': 'debug',
+        }),
+      );
+    } catch (e, st) {}
   }
 
   Future<void> triggerServerNotification({
@@ -247,17 +224,10 @@ class NotificationService {
         'customData': customData ?? {},
         'createdAt': FieldValue.serverTimestamp(),
       };
+
       await FirebaseFirestore.instance
           .collection('notifications')
           .add(notificationData);
-    } catch (e, st) {
-      ErrorLogService.logNotificationError(
-        type: 'server_notification',
-        targetUserId: targetUserId,
-        exception: e,
-        stackTrace: st,
-        additionalInfo: 'Server trigger failed',
-      );
-    }
+    } catch (e, st) {}
   }
 }
